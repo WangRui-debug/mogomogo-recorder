@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#177467">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>もごもご音声収録</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="public.css">
+  <script defer src="vendor/lucide.min.js"></script>
+  <script defer src="vendor/jszip.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon"><i data-lucide="audio-lines"></i></span><div><strong>もごもご音声収録</strong><span>通常発話・もごもご発話 / 15文</span></div></div>
+    <div class="header-actions"><span id="storage-status" class="storage-status"><i data-lucide="hard-drive"></i>このブラウザに保存</span><button class="icon-button" id="help-button" title="収録のご案内" aria-label="収録のご案内"><i data-lucide="circle-help"></i></button><button id="export-button" class="button primary"><i data-lucide="download"></i><span>データを保存</span></button></div>
+  </header>
+  <div id="error-banner" class="banner error" role="alert" hidden></div>
+  <div class="workspace">
+    <aside class="sidebar">
+      <section class="session-settings">
+        <div class="section-title"><h2>収録セッション</h2><button id="new-session" class="icon-button" title="新しいセッション" aria-label="新しいセッション"><i data-lucide="plus"></i></button></div>
+        <label for="session-select">セッション</label><select id="session-select"></select>
+        <label for="speaker-id">話者ID</label><input id="speaker-id" value="spk001" maxlength="32" pattern="[A-Za-z0-9_-]+" autocomplete="off" spellcheck="false">
+        <div class="progress-caption"><span>採用済み</span><strong id="progress-text">0 / 30</strong></div><progress id="progress" value="0" max="30"></progress>
+      </section>
+      <div class="list-heading"><h2>読み上げ原稿</h2><span><b class="h-text">H</b> / <b class="m-text">M</b></span></div>
+      <nav id="sentence-list" aria-label="読み上げ原稿"></nav>
+    </aside>
+    <main>
+      <section class="setup-band">
+        <div class="setup-label"><i data-lucide="mic"></i><h2>マイク</h2></div>
+        <select id="microphone-select" aria-label="入力マイク"><option value="">既定のマイク</option></select>
+        <button id="enable-microphone" class="button"><i data-lucide="power"></i><span>接続する</span></button>
+        <span id="mic-status" class="muted">未接続</span>
+      </section>
+      <div class="main-columns">
+        <div class="recording-column">
+          <section class="reading-section">
+            <div class="reading-top"><span class="eyebrow" id="sentence-count">原稿 01 / 15</span><div class="segmented" aria-label="発話条件"><button id="mode-h" aria-pressed="true"><b>H</b> ハキハキ</button><button id="mode-m" aria-pressed="false"><b>M</b> もごもご</button></div></div>
+            <p class="mode-instruction" id="mode-instruction"></p>
+            <div class="script-heading"><span id="condition-label" class="condition-tag">ハキハキ発話</span><label class="check-label"><input id="furigana-toggle" type="checkbox" checked>ふりがな</label></div>
+            <div id="sentence-text" class="sentence-text" lang="ja"></div>
+            <p id="pronunciation-note" class="pronunciation-note"></p>
+            <div class="recording-surface">
+              <div class="signal-header"><span id="record-state"><span class="status-dot"></span>録音待ち</span><span id="timer">00:00.0</span></div>
+              <canvas id="waveform" aria-label="マイクの入力波形"></canvas>
+              <div class="level-row"><span>入力</span><meter id="level-meter" min="0" max="1" value="0" aria-label="マイクの音量"></meter><span id="level-text">— dBFS</span></div>
+              <div class="record-controls"><button id="record-button" class="button record" disabled><i data-lucide="mic"></i><span>録音する</span></button><button id="stop-button" class="button stop" hidden><i data-lucide="square"></i><span>停止</span></button><label class="check-label"><input id="countdown-toggle" type="checkbox" checked>3秒カウント</label></div>
+              <div id="countdown" class="countdown" hidden aria-live="assertive"></div>
+            </div>
+          </section>
+          <section class="review-section">
+            <div class="section-title"><h2>録音の確認</h2><span id="take-status" class="muted">未録音</span></div>
+            <div id="empty-take" class="empty-take"><i data-lucide="headphones"></i><span>録音はまだありません</span></div>
+            <div id="review-content" hidden>
+              <div class="take-row"><select id="take-select" aria-label="テイク"></select><button class="icon-button" id="download-take" title="このテイクを保存" aria-label="このテイクを保存"><i data-lucide="download"></i></button></div>
+              <audio id="take-audio" controls preload="metadata"></audio>
+              <div id="quality-status" class="quality-status"></div>
+              <div class="review-fields"><label>もごもご度（自己評価・任意）<select id="rating"><option value="">未評価</option><option value="1">1 · ほとんどない</option><option value="2">2 · ややある</option><option value="3">3 · 中程度</option><option value="4">4 · 強い</option><option value="5">5 · とても強い</option></select></label><label>メモ（任意）<input id="take-note" maxlength="300" placeholder="読み間違い・周囲の音など"></label></div>
+              <button id="accept-next" class="button primary"><i data-lucide="check"></i><span>採用して次へ</span><i data-lucide="arrow-right"></i></button>
+            </div>
+          </section>
+          <footer class="sentence-navigation"><button id="previous" class="button quiet"><i data-lucide="arrow-left"></i>前へ</button><span id="position-status">H · 01 / 15</span><button id="next" class="button quiet">次へ<i data-lucide="arrow-right"></i></button></footer>
+        </div>
+        <aside class="guidance-column">
+          <section class="reference-section">
+            <div class="section-title"><h2>参考音声</h2><i data-lucide="headphones"></i></div>
+            <p class="reference-name">参考音声 006 · もごもご発話</p>
+            <label class="button reference-picker"><i data-lucide="folder-open"></i>別の音声を選択<input id="reference-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac" aria-label="参考音声ファイル"></label>
+            <p id="reference-status" class="reference-caption" role="status">参考音声 006 を読み込み中…</p>
+            <audio id="reference-audio" controls preload="metadata" hidden></audio>
+            <button id="clear-reference" class="button quiet" hidden><i data-lucide="x"></i>006に戻す</button>
+            <p class="reference-caption">006はこのページで公開されています。別途選んだ音声はこの端末でのみ再生され、アップロードされません。</p>
+            <p class="reference-caption">声の高さや音色ではなく、話し方を参考にしてください。</p>
+          </section>
+          <section class="guide-section"><h2>読み方</h2>
+            <div class="guide-entry"><span class="letter h">H</span><div><h3>ハキハキ発話</h3><p>普段の会話のように、相手に伝わるようにはっきり読んでください。</p></div></div>
+            <div class="guide-entry"><span class="letter m">M</span><div><h3>もごもご発話</h3><p>参考音声をまねし、口の開きを小さく、力を抜いて少し気だるい感じで読んでください。</p></div></div>
+            <div class="reading-note"><i data-lucide="info"></i><p>単に小声やひそひそ声にせず、原稿の言葉をそのまま読んでください。無理に口を閉じたり、何かで口を固定したりする必要はありません。</p></div>
+          </section>
+          <section class="check-section"><h2>収録前の確認</h2><ul><li>担当者と短く練習する</li><li>マイクとの距離を一定にする</li><li>参考音声を止めてから録音する</li><li>読み終えたら少し待って停止する</li></ul><button id="practice-button" class="button quiet"><i data-lucide="audio-lines"></i>練習録音</button></section>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <dialog id="guide-dialog"><div class="dialog-title"><h2>収録のご案内</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p>同じ15文を、ハキハキ発話（H）ともごもご発話（M）の2通りで読みます。原稿にはふりがなが付いています。</p><ol><li>参考音声を聞き、担当者と短く練習します。</li><li>話者IDを確認し、マイクを接続します。</li><li>各文を録音し、回聴して採用します。</li><li>最後に「データを保存」からZIPをダウンロードし、担当者に渡してください。</li></ol><p>原稿では2通り合わせて5分以内が目安です。説明、練習、回聴、録り直しには別途時間がかかります。</p><p class="dialog-note">音声はこの端末のブラウザに保存され、サーバーには送信されません。この公開版にはログイン制限・Driveへの自動送信はありません。ブラウザのデータを削除する前に、必ずZIPを保存してください。</p><button class="button primary close-dialog">確認しました</button></dialog>
+  <dialog id="practice-dialog"><div class="dialog-title"><h2>練習録音</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p>「今日は、よろしくお願いします。」</p><p class="muted">担当者と声の出し方を確認してください。練習音声は収録データに含まれません。</p><div class="practice-controls"><button id="practice-start" class="button primary"><i data-lucide="mic"></i>練習を録音</button><button id="practice-stop" class="button stop" hidden><i data-lucide="square"></i>停止</button></div><audio id="practice-audio" controls hidden></audio><div id="practice-state" role="status"></div></dialog>
+  <dialog id="export-dialog"><div class="dialog-title"><h2>収録データを保存</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p id="export-summary"></p><label class="check-label"><input id="include-all" type="checkbox" checked>採用していないテイクも含める</label><p class="dialog-note">WAV、発話条件、原稿、評価、採用状況をZIPにまとめます。保存後はZIPを担当者に渡してください。</p><button id="confirm-export" class="button primary"><i data-lucide="download"></i><span>ZIPをダウンロード</span></button><p id="export-status" role="status"></p></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
