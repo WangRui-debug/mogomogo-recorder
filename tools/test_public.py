@@ -11,7 +11,7 @@ from pathlib import Path
 import wave
 import zipfile
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 
 def main():
@@ -90,6 +90,9 @@ def main():
         assert page.locator('#progress-text').inner_text() == '1 / 30'
         page.locator('.sentence-item').first.click()
         page.locator('#mode-m').click()
+        instruction = '「自分の喋っている内容を相手に伝える気がない」喋り方をする人を演じて，相手に伝わらないほど不明瞭に喋ってください'
+        expect(page.locator('#mode-instruction')).to_have_text(instruction)
+        expect(page.locator('.guide-entry').nth(1).locator('p')).to_have_text(instruction)
         record()
         page.locator('#rating').select_option('4')
         page.wait_for_timeout(100)

@@ -146,7 +146,7 @@ function render() {
   $('mode-m').setAttribute('aria-pressed', String(state.mode === 'M'));
   $('mode-instruction').textContent = state.mode === 'H'
     ? '普段の会話のように、相手に伝わるようにはっきり読んでください。'
-    : '参考音声をまねし、口の開きを小さく、力を抜いて読んでください。';
+    : '「自分の喋っている内容を相手に伝える気がない」喋り方をする人を演じて，相手に伝わらないほど不明瞭に喋ってください';
   $('condition-label').textContent = state.mode === 'H' ? 'ハキハキ発話' : 'もごもご発話';
   $('condition-label').classList.toggle('m', state.mode === 'M');
   $('sentence-text').replaceChildren(rubyText(sentence.annotated));
