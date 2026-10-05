@@ -37,7 +37,17 @@ def main():
         requests = []
         page.on('request', lambda req: requests.append((req.method, req.url)))
         page.on('pageerror', lambda exc: errors.append(str(exc)))
+        # An unversioned script may still be stale in an existing user's cache.
+        # It must not be requested after this release.
+        page.route('**/app.js', lambda route: route.fulfill(
+            body='throw new Error("Stale unversioned app.js requested");',
+            content_type='application/javascript'))
         page.goto(args.url)
+        versions = page.evaluate("""() => [...document.querySelectorAll('script[src], link[rel="stylesheet"]')]
+            .map(el => new URL(el.src || el.href))
+            .filter(url => /\\/(app|spectrum)\\.js$|\\/(styles|public|spectrum)\\.css$/.test(url.pathname))
+            .map(url => url.searchParams.get('v'))""")
+        assert len(versions) == 5 and len(set(versions)) == 1 and versions[0], versions
         page.locator('#guide-dialog .primary').click()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 15')
         assert page.locator('#sentence-text ruby').count() > 0
@@ -61,6 +71,8 @@ def main():
 
 
         expect(page.locator('#frequency-status')).to_have_text('モニター中')
+        # Verify the actual microphone branch before adding a separate test oscillator.
+        page.wait_for_function('() => liveSpectrum.data && Math.max(...liveSpectrum.data) > -90', timeout=15000)
         # Inject known tones only into the visualization branch, not the PCM recorder.
         page.evaluate("""() => {
             state.source.disconnect(state.analyser);
@@ -268,7 +280,7 @@ def main():
         download_info.value.save_as(args.output / 'storage-failure-recovery.wav')
         recovery.close()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['local reference playback', 'approved 006 bundled and playable', 'reference excluded from recording ZIP', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['local reference playback', 'approved 006 bundled and playable', 'reference excluded from recording ZIP', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
