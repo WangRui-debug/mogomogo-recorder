@@ -273,6 +273,7 @@ async function connectMicrophone() {
     };
     state.source = state.context.createMediaStreamSource(state.stream);
     state.analyser = state.context.createAnalyser(); state.analyser.fftSize = 2048;
+    state.analyser.smoothingTimeConstant = 0.25;
     state.mute = state.context.createGain(); state.mute.gain.value = 0;
     state.source.connect(state.analyser); state.source.connect(state.node);
     state.node.connect(state.mute); state.mute.connect(state.context.destination);
@@ -448,6 +449,7 @@ async function exportZip() {
 }
 
 function draw() {
+  liveSpectrum.draw(state.analyser, state.context?.sampleRate, state.phase);
   const canvas = $('waveform'); const scale = window.devicePixelRatio || 1;
   const width = canvas.clientWidth, height = canvas.clientHeight;
   if (canvas.width !== Math.round(width * scale) || canvas.height !== Math.round(height * scale)) {

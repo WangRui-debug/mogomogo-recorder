@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / 'site'
 EXPECTED = {
-    'index.html', 'app.js', 'styles.css', 'public.css', 'recorder-worklet.js',
+    'index.html', 'app.js', 'spectrum.js', 'spectrum.css', 'styles.css', 'public.css', 'recorder-worklet.js',
     '.nojekyll', 'robots.txt', 'assets/script.json', 'assets/script.txt', 'assets/reference006.wav',
     'vendor/lucide.min.js', 'vendor/lucide-LICENSE', 'vendor/jszip.min.js', 'vendor/jszip-LICENSE',
 }

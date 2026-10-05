@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="public.css">
   <script defer src="vendor/lucide.min.js"></script>
   <script defer src="vendor/jszip.min.js"></script>
+  <link rel="stylesheet" href="spectrum.css">
+  <script defer src="spectrum.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -50,6 +52,17 @@
               <div class="signal-header"><span id="record-state"><span class="status-dot"></span>録音待ち</span><span id="timer">00:00.0</span></div>
               <canvas id="waveform" aria-label="マイクの入力波形"></canvas>
               <div class="level-row"><span>入力</span><meter id="level-meter" min="0" max="1" value="0" aria-label="マイクの音量"></meter><span id="level-text">— dBFS</span></div>
+              <section class="frequency-monitor" aria-label="入力音声の周波数解析">
+                <div class="frequency-toolbar">
+                  <div class="segmented" role="group" aria-label="周波数表示">
+                    <button type="button" data-frequency-view="spectrogram" aria-pressed="true" title="時間と周波数">スペクトログラム</button>
+                    <button type="button" data-frequency-view="spectrum" aria-pressed="false" title="周波数と強さ">スペクトル</button>
+                  </div>
+                  <span id="frequency-status" role="status">マイク未接続</span>
+                </div>
+                <canvas id="frequency-canvas" role="img" aria-label="マイク入力の直近6秒のスペクトログラム"></canvas>
+                <div id="frequency-legend" class="frequency-legend" aria-label="色の強度範囲: -100から-20 dB">−100<span aria-hidden="true"></span>−20 dB</div>
+              </section>
               <div class="record-controls"><button id="record-button" class="button record" disabled><i data-lucide="mic"></i><span>録音する</span></button><button id="stop-button" class="button stop" hidden><i data-lucide="square"></i><span>停止</span></button><label class="check-label"><input id="countdown-toggle" type="checkbox" checked>3秒カウント</label></div>
               <div id="countdown" class="countdown" hidden aria-live="assertive"></div>
             </div>

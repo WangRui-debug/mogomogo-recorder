@@ -54,3 +54,9 @@ python3 tools/test_public.py --url http://localhost:8766/preview/
 - [GitHub Pages自定义发布工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 
 本公开备用版与受控登录、自动Drive收录版相互独立。今后增加自动上传时，应另配后端认证和授权，不在前端存放管理员凭证。
+
+## 实时频谱
+
+接通麦克风后，波形下方显示实时频谱。可切换「スペクトログラム」（最近6秒的滚动声谱图）和「スペクトル」（当前频谱曲线）。频率范围为0–8 kHz，若输入采样率较低则限制到Nyquist频率。显示使用浏览器原生AnalyserNode，FFT大小2048，平滑系数0.25，最高30次/秒；热图色阶为−100至−20 dB，曲线为−100至0 dB。这里是数字信号FFT幅度，不是经过校准的声压级，也不是もごもご程度评分。
+
+分析与PCM录音为并行分支，不改变WAV内容，不添加上传请求。断开麦克风后清空频谱；停止录音但麦克风仍连接时继续显示实时输入。显示数据不加入导出ZIP。浏览器后台标签可能暂停绘图，返回后不会补造遗漏的频谱数据。

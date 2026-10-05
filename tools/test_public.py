@@ -59,10 +59,70 @@ def main():
         page.wait_for_function('() => !document.querySelector("#record-button").disabled')
         page.locator('#countdown-toggle').uncheck()
 
+
+        expect(page.locator('#frequency-status')).to_have_text('モニター中')
+        # Inject known tones only into the visualization branch, not the PCM recorder.
+        page.evaluate("""() => {
+            state.source.disconnect(state.analyser);
+            const oscillator = state.context.createOscillator();
+            const gain = state.context.createGain();
+            const sink = state.context.createGain();
+            gain.gain.value = 0.2; sink.gain.value = 0;
+            oscillator.connect(gain); gain.connect(state.analyser);
+            state.analyser.connect(sink); sink.connect(state.context.destination);
+            oscillator.frequency.value = 1000; oscillator.start();
+            window.spectrumTest = {oscillator, gain, sink};
+        }""")
+        def check_tone(hz):
+            page.evaluate('(hz) => spectrumTest.oscillator.frequency.value = hz', hz)
+            page.wait_for_timeout(500)
+            actual = page.evaluate("""() => {
+                const data = liveSpectrum.data;
+                const peak = data.indexOf(Math.max(...data));
+                return peak * state.context.sampleRate / state.analyser.fftSize;
+            }""")
+            assert abs(actual - hz) < 60, (hz, actual)
+            row = page.evaluate("""() => {
+                const data = liveSpectrum.historyContext.getImageData(179, 0, 1, 128).data;
+                let best = 0;
+                for (let row = 1; row < 128; row++) {
+                    if (data[row * 4] > data[best * 4]) best = row;
+                }
+                return best;
+            }""")
+            assert abs((127 - row) / 128 * 8000 - hz) < 160, (hz, row)
+
+        check_tone(1000)
+        before = page.locator('#frequency-canvas').evaluate('(c) => c.toDataURL()')
+        check_tone(2000)
+        after = page.locator('#frequency-canvas').evaluate('(c) => c.toDataURL()')
+        assert before != after
+        for width in [390, 1440]:
+            page.set_viewport_size({'width': width, 'height': 1050})
+            for mode in ['spectrum', 'spectrogram']:
+                button = page.locator(f'[data-frequency-view="{mode}"]')
+                button.click()
+                expect(button).to_have_attribute('aria-pressed', 'true')
+                page.wait_for_timeout(150)
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                assert page.locator('#frequency-canvas').evaluate('(c) => c.clientHeight === 154 && c.clientWidth > 150')
+                page.locator('.recording-surface').screenshot(path=str(args.output / f'{mode}-{width}.png'))
+        page.evaluate("""() => {
+            spectrumTest.oscillator.stop(); spectrumTest.gain.disconnect();
+            state.analyser.disconnect(spectrumTest.sink); spectrumTest.sink.disconnect();
+            state.source.connect(state.analyser); delete window.spectrumTest;
+        }""")
+        page.locator('#enable-microphone').click()
+        expect(page.locator('#frequency-status')).to_have_text('マイク未接続')
+        assert page.evaluate('() => liveSpectrum.historyContext.getImageData(0, 0, 180, 128).data.every(v => v === 0)')
+        page.locator('#enable-microphone').click()
+        expect(page.locator('#frequency-status')).to_have_text('モニター中')
+
         def record():
             page.locator('#record-button').click()
             page.wait_for_function('() => document.body.classList.contains("recording")')
             page.wait_for_timeout(1600)
+            expect(page.locator('#frequency-status')).to_have_text('録音中')
             assert page.locator('#waveform').evaluate('(c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0)')
             page.locator('#stop-button').click()
             page.wait_for_function('() => !document.querySelector("#record-button").disabled')
@@ -208,7 +268,7 @@ def main():
         download_info.value.save_as(args.output / 'storage-failure-recovery.wav')
         recovery.close()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['local reference playback', 'approved 006 bundled and playable', 'reference excluded from recording ZIP', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['local reference playback', 'approved 006 bundled and playable', 'reference excluded from recording ZIP', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
