@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / 'site'
 EXPECTED = {
     'index.html', 'app.js', 'spectrum.js', 'spectrum.css', 'styles.css', 'public.css', 'recorder-worklet.js',
-    '.nojekyll', 'robots.txt', 'assets/script.json', 'assets/script.txt', 'assets/reference006.wav',
+    '.nojekyll', 'robots.txt', 'assets/script.json', 'assets/script.txt',
     'vendor/lucide.min.js', 'vendor/lucide-LICENSE', 'vendor/jszip.min.js', 'vendor/jszip-LICENSE',
 }
 REPO_FILES = {
@@ -39,18 +39,12 @@ def main():
         raise ValueError(f'Public asset mismatch: missing={EXPECTED - actual}, extra={actual - EXPECTED}')
     script = json.loads((SITE / 'assets/script.json').read_text(encoding='utf-8'))
     assert len(script['sentences']) == 15
-    reference = script['reference']
-    assert reference['id'] == '006' and reference['url'] == 'assets/reference006.wav'
-    audio = (SITE / reference['url']).read_bytes()
-    assert hashlib.sha256(audio).hexdigest() == reference['sha256']
-    assert reference['sha256'] == 'fdcd76606fb62d71de7242004847fba4052fc0c4b1c4dee5eba93f493a153182'
-    assert len(audio) == reference['bytes']
-    assert 'reference_sha256' not in script
+    assert 'reference' not in script and 'reference_sha256' not in script
     source = (SITE / 'assets/script.txt').read_bytes()
     assert hashlib.sha256(source).hexdigest() == script['script_sha256']
     assert source.decode('utf-8') == script['source_text']
     assert 'noindex' in (SITE / 'index.html').read_text(encoding='utf-8')
-    print(f'PASS: {len(actual)} public assets, 15 sentences, only the specifically approved 006 audio; no other private assets.')
+    print(f'PASS: {len(actual)} public assets, 15 sentences, no reference recordings or private assets.')
 
 
 if __name__ == '__main__':

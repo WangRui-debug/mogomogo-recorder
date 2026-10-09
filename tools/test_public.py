@@ -20,13 +20,6 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('/tmp/mogomogo-public-check'))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    tone = args.output / 'reference-test.wav'
-    with wave.open(str(tone), 'wb') as audio:
-        audio.setnchannels(1)
-        audio.setsampwidth(2)
-        audio.setframerate(16000)
-        audio.writeframes(b''.join(struct.pack('<h', round(3000 * math.sin(2 * math.pi * 220 * t / 16000))) for t in range(32000)))
-    reference_hash = hashlib.sha256(tone.read_bytes()).hexdigest()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(args=[
             '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
@@ -51,19 +44,8 @@ def main():
         page.locator('#guide-dialog .primary').click()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 15')
         assert page.locator('#sentence-text ruby').count() > 0
-        page.wait_for_function('() => document.querySelector("#reference-audio").readyState >= 1')
-        assert page.locator('#reference-audio').get_attribute('src') == 'assets/reference006.wav'
-        assert page.locator('#reference-audio').evaluate('(a) => a.duration > 10')
-        page.locator('#reference-audio').evaluate('(a) => a.play()')
-        page.wait_for_timeout(150)
-        page.locator('#reference-audio').evaluate('(a) => a.pause()')
-        page.screenshot(path=str(args.output / 'desktop-default006.png'), full_page=True)
-        page.locator('#reference-file').set_input_files(str(tone))
-        page.wait_for_function('() => !document.querySelector("#reference-audio").hidden')
-        assert page.locator('#reference-audio').evaluate('(a) => a.readyState >= 1 && a.duration > 1')
-        page.locator('#reference-audio').evaluate('(a) => a.play()')
-        page.wait_for_timeout(100)
-        page.locator('#reference-audio').evaluate('(a) => a.pause()')
+        assert page.locator('#reference-audio, #reference-file, .reference-section').count() == 0
+        assert page.evaluate('() => !state.script.reference && !state.script.reference_sha256')
         page.screenshot(path=str(args.output / 'desktop-ready.png'), full_page=True)
         page.locator('#enable-microphone').click()
         page.wait_for_function('() => !document.querySelector("#record-button").disabled')
@@ -177,9 +159,15 @@ def main():
         page.locator('#practice-stop').click()
         page.wait_for_function('() => !document.querySelector("#practice-audio").hidden')
         page.locator('#practice-dialog .close-dialog').click()
+        # Prior instruction versions must remain readable without restoring old references.
+        page.evaluate("""async () => {
+            state.session.scriptSha256 = state.script.compatible_script_sha256[0];
+            await saveSession();
+            state.takes[0].reference = {id: 'withdrawn', source: 'bundled'};
+            await put('takes', state.takes[0]);
+        }""")
         page.reload()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 15')
-        assert page.locator('#reference-audio').get_attribute('src') == 'assets/reference006.wav'
         page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 30"')
         page.locator('#export-button').click()
         with page.expect_download() as download_info:
@@ -200,8 +188,9 @@ def main():
             assert pairs[0]['mumbling_wav'].endswith('M_take01.wav')
             meta = json.loads(zipped.read('session.json'))
             assert len(meta['takes']) == 3 and meta['scriptSha256']
-            assert all(take['reference']['sha256'] == reference_hash for take in meta['takes'])
-            assert 'reference-test.wav' not in zipped.read('session.json').decode('utf-8')
+            assert all('reference' not in take for take in meta['takes'])
+            assert meta['exportedScriptSha256']
+            assert '参考音声' not in zipped.read('script.txt').decode('utf-8')
             assert len(wavs) == 3
         page.locator('#include-all').uncheck()
         with page.expect_download() as download_info:
@@ -242,14 +231,10 @@ def main():
         second_tab.wait_for_function('() => document.querySelector("#error-banner").textContent.includes("別のタブ")')
         assert second_tab.locator('#record-button').is_disabled()
         second_tab.close()
-        page.locator('#reference-file').set_input_files({
-            'name': 'bad.wav', 'mimeType': 'audio/wav', 'buffer': b'not a wave file',
-        })
-        page.wait_for_function('() => document.querySelector("#error-banner").textContent.includes("再生できません")')
-        assert page.locator('#reference-audio').get_attribute('src') == 'assets/reference006.wav'
         origin = urlsplit(args.url).netloc
         assert all(method == 'GET' for method, url in requests), requests
         assert all(url.startswith('blob:') or urlsplit(url).netloc == origin for method, url in requests), requests
+        assert not any(urlsplit(url).path.endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')) for method, url in requests), requests
         assert not errors, errors
         denied = browser.new_context()
         denied_page = denied.new_page()
@@ -280,7 +265,7 @@ def main():
         download_info.value.save_as(args.output / 'storage-failure-recovery.wav')
         recovery.close()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['local reference playback', 'approved 006 bundled and playable', 'reference excluded from recording ZIP', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

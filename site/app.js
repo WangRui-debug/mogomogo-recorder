@@ -8,7 +8,7 @@ const state = {
   viewTake: null, busy: false, phase: 'idle', purpose: null, capture: null,
   stream: null, context: null, node: null, analyser: null, source: null, mute: null,
   chunks: [], started: 0, autoStop: null, stopResolve: null, reviewURL: null,
-  reference: null, referenceURL: null, practiceURL: null, micSettings: null, tabBlocked: false, unsaved: null, attempt: 0,
+  practiceURL: null, micSettings: null, tabBlocked: false, unsaved: null, attempt: 0,
 };
 const positionKey = () => `${state.mode}${state.script.sentences[state.index].id}`;
 const isRecording = () => state.phase !== 'idle';
@@ -102,7 +102,7 @@ async function newSession() {
 }
 async function selectSession(id) {
   state.session = state.sessions.find((session) => session.id === id);
-  if (state.session.scriptSha256 !== state.script.script_sha256) {
+  if (state.session.scriptSha256 !== state.script.script_sha256 && !state.script.compatible_script_sha256?.includes(state.session.scriptSha256)) {
     throw new Error('原稿の版が異なります。元の原稿を戻してデータを保存してください。');
   }
   state.index = state.session.position.index;
@@ -199,7 +199,7 @@ function renderReview() {
 }
 function updateControls() {
   const lock = locked();
-  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'countdown-toggle', 'reference-file', 'clear-reference']) $(id).disabled = lock;
+  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'countdown-toggle']) $(id).disabled = lock;
   document.querySelectorAll('.sentence-item').forEach((button) => { button.disabled = lock; });
   $('speaker-id').disabled = lock || state.takes.length > 0;
   if (state.unsaved) {
@@ -318,7 +318,6 @@ async function startRecording(purpose) {
     await state.context.resume();
     if (attempt !== state.attempt) return;
     state.capture.recordedAt = new Date().toISOString();
-    state.capture.reference = state.reference ? { ...state.reference } : null;
     state.chunks = []; state.started = performance.now(); state.phase = 'recording';
     state.node.port.postMessage({ type: 'start' });
     $('record-state').lastChild.textContent = '録音中';
@@ -377,7 +376,7 @@ async function stopRecording() {
         ...wave, id: crypto.randomUUID(), sessionId: state.session.id, sentenceId: state.capture.sentence.id,
         text: state.capture.sentence.text, condition: state.capture.condition,
         number: Math.max(0, ...previous.map((item) => item.number)) + 1,
-        reference: state.capture.reference, recordedAt: state.capture.recordedAt, rating: null, note: '', deviceSettings: { ...state.micSettings },
+        recordedAt: state.capture.recordedAt, rating: null, note: '', deviceSettings: { ...state.micSettings },
       };
       state.takes.push(take); state.viewTake = take.id;
       try { await put('takes', take); }
@@ -429,11 +428,11 @@ async function exportZip() {
     zip.file('script.txt', state.script.source_text);
     zip.file('session.json', JSON.stringify({
       ...state.session, exportedAt: new Date().toISOString(), appVersion: '1.0.0-public',
-      scriptVersion: state.script.version, referencePolicy: 'Bundled reference 006 or local file; per-take source and SHA256 below; reference audio is excluded from this recording archive.',
+      scriptVersion: state.script.version, exportedScriptSha256: state.script.script_sha256, referencePolicy: 'No reference audio is provided or loaded.',
       audioFormat: 'PCM16 mono WAV; browser AudioContext sample rate; no normalization or trimming',
       alignment: 'Same text only. Recordings are not frame-aligned.',
       userAgent: navigator.userAgent,
-      takes: takes.map(({ blob, ...metadata }) => ({ ...metadata, file: `audio/${metadata.condition}/${filename(metadata)}` })),
+      takes: takes.map(({ blob, reference, ...metadata }) => ({ ...metadata, file: `audio/${metadata.condition}/${filename(metadata)}` })),
     }, null, 2));
     zip.file('README.txt', 'H = 通常のハキハキ発話 / clear speech\nM = もごもご発話 / mumbled speech\nmanifest.csv: all exported takes; selected=true identifies accepted takes.\npairs.csv: accepted same-text pairs only; empty paths indicate missing selections.\nThe two conditions are NOT time-aligned. No loudness normalization or silence trimming was applied.\nMumbling rating is optional participant self-report, not an objective score.\nReference and practice audio are not included. Keep these recordings within the approved research scope.\n');
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (metadata) => {
@@ -483,61 +482,7 @@ function draw() {
 }
 
 
-function clearReference() {
-  $('reference-audio').pause();
-  $('reference-audio').removeAttribute('src');
-  $('reference-audio').load();
-  $('reference-audio').hidden = true;
-  if (state.referenceURL) URL.revokeObjectURL(state.referenceURL);
-  state.referenceURL = null; state.reference = null;
-  $('reference-file').value = '';
-  $('reference-status').textContent = '参考音声は未選択です。';
-  $('clear-reference').hidden = true;
-}
-async function loadReference(url, metadata, label, local = false) {
-  clearReference();
-  if (local) state.referenceURL = url;
-  const audio = $('reference-audio');
-  try {
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('音声の読み込みがタイムアウトしました。')), 10000);
-      const finish = (cause) => {
-        clearTimeout(timer); audio.onloadedmetadata = null; audio.onerror = null;
-        if (cause) reject(cause); else resolve();
-      };
-      audio.onloadedmetadata = () => finish();
-      audio.onerror = () => finish(new Error('この音声を再生できません。WAVまたはMP3をお試しください。'));
-      audio.src = url;
-      audio.load();
-    });
-    state.reference = metadata;
-    audio.hidden = false; $('clear-reference').hidden = !local;
-    $('reference-status').textContent = label;
-    error('');
-  } catch (cause) { clearReference(); throw cause; }
-}
-async function useDefaultReference() {
-  const reference = state.script.reference;
-  await loadReference(reference.url, { id: reference.id, sha256: reference.sha256, bytes: reference.bytes, source: 'bundled' }, '参考音声 006');
-}
-async function chooseReference() {
-  const file = $('reference-file').files[0];
-  if (!file) return;
-  try {
-    if (!file.size || file.size > 25 * 1024 * 1024) throw new Error('25 MB以下の音声ファイルを選んでください。');
-    if (!file.type.startsWith('audio/') && !/\.(wav|mp3|m4a|ogg|flac)$/i.test(file.name)) throw new Error('音声ファイルを選んでください。');
-    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-    const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
-    await loadReference(URL.createObjectURL(file), { sha256: hash, bytes: file.size, source: 'local' }, file.name, true);
-  } catch (cause) {
-    await useDefaultReference();
-    throw cause;
-  }
-}
-
 function bindEvents() {
-  $('reference-file').onchange = () => action(chooseReference);
-  $('clear-reference').onclick = () => action(useDefaultReference);
   $('new-session').onclick = () => action(newSession);
   $('session-select').onchange = () => action(() => selectSession($('session-select').value));
   $('speaker-id').onchange = () => action(async () => {
@@ -569,7 +514,7 @@ function bindEvents() {
     const take = chosenTake(); if (!take || state.unsaved) return;
     state.session.selected[positionKey()] = take.id; await saveSession();
     if (Object.keys(state.session.selected).length === 30) toast('30発話の採用が完了しました。データを保存してください。');
-    else if (state.mode === 'H' && state.index === 14) toast('次はもごもご発話です。参考音声を確認してください。');
+    else if (state.mode === 'H' && state.index === 14) toast('次はもごもご発話です。読み方を確認してください。');
     await step(1);
   });
   $('download-take').onclick = () => { const take = chosenTake(); if (take) download(take.blob, filename(take)); };
@@ -608,10 +553,9 @@ function bindEvents() {
 async function initialize() {
   icons();
   try {
-    const response = await fetch('assets/script.json');
+    const response = await fetch('assets/script.json?v=20261009-1', { cache: 'no-store' });
     if (!response.ok) throw new Error('原稿を取得できません。ページを再読み込みしてください。');
     state.script = await response.json();
-    await useDefaultReference();
     state.db = await openDatabase();
     state.sessions = await getAll('sessions');
     const last = localStorage.getItem(STORAGE_PREFIX + 'current-session');
