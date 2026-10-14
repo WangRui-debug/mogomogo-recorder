@@ -41,7 +41,7 @@ def main():
             .map(el => new URL(el.src || el.href))
             .filter(url => /\\/(app|spectrum)\\.js$|\\/(styles|public|spectrum)\\.css$/.test(url.pathname))
             .map(url => url.searchParams.get('v'))""")
-        assert len(versions) == 5 and len(set(versions)) == 1 and versions[0], versions
+        assert len(versions) == 4 + page.locator('link[href^="public.css"]').count() and len(set(versions)) == 1 and versions[0], versions
         page.locator('#guide-dialog .primary').click()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
         assert page.locator('#sentence-text ruby').count() > 0
@@ -141,7 +141,7 @@ def main():
         assert page.locator('#take-select option').count() == 2
         page.locator('#take-select').select_option(index=0)
         page.locator('#accept-next').click()
-        page.wait_for_function('() => document.querySelector("#position-status").textContent === "H · 02 / 22"')
+        page.wait_for_function('() => document.querySelector("#position-status").textContent === "M · 01 / 22"')
         assert page.locator('#progress-text').inner_text() == '1 / 44'
         page.locator('.sentence-item').first.click()
         page.locator('#mode-m').click()
@@ -153,6 +153,7 @@ def main():
         page.wait_for_timeout(100)
         page.locator('#accept-next').click()
         page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
+        expect(page.locator('#position-status')).to_have_text('H · 02 / 22')
         page.locator('#practice-button').click()
         page.locator('#practice-start').click()
         page.wait_for_function('() => document.body.classList.contains("recording")')
@@ -206,6 +207,43 @@ def main():
         page.wait_for_function('() => document.querySelector("#progress-text").textContent === "0 / 44"')
         page.locator('#session-select').select_option(original_session)
         page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
+        # The participant library restores the selected recording and plays it.
+        expect(page.locator('[data-key="H01"]')).to_be_enabled()
+        page.locator('[data-key="H01"]').click()
+        page.wait_for_function('() => !document.querySelector("#take-audio").paused')
+        assert page.evaluate('chosenTake().number') == 1
+        page.locator('#take-audio').evaluate('(audio) => audio.pause()')
+        # Cancel deletion first, then remove only the unselected retake.
+        page.locator('#take-select').select_option(index=1)
+        page.once('dialog', lambda dialog: dialog.dismiss())
+        page.locator('#delete-take').click()
+        assert page.locator('#take-select option').count() == 2
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.locator('#delete-take').click()
+        page.wait_for_function('() => state.takes.length === 2 && !state.busy')
+        expect(page.locator('#progress-text')).to_have_text('2 / 44')
+        # Deleting an accepted take clears its selection atomically, not the other condition.
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.locator('#delete-take').click()
+        page.wait_for_function('() => state.takes.length === 1 && !state.busy')
+        expect(page.locator('#progress-text')).to_have_text('1 / 44')
+        expect(page.locator('[data-key="H01"]')).to_be_disabled()
+        expect(page.locator('[data-key="M01"]')).to_be_enabled()
+        page.reload()
+        page.wait_for_function('() => state.takes.length === 1 && !state.busy')
+        expect(page.locator('#progress-text')).to_have_text('1 / 44')
+        other_session = page.locator('#session-select option').evaluate_all(
+            '(items) => items.find(item => !item.selected).value')
+        page.locator('#session-select').select_option(other_session)
+        page.wait_for_function('() => state.takes.length === 0')
+        expect(page.locator('[data-key="M01"]')).to_be_disabled()
+        page.locator('#session-select').select_option(original_session)
+        page.wait_for_function('() => state.takes.length === 1')
+        page.locator('[data-key="M01"]').click()
+        page.wait_for_function('() => !document.querySelector("#take-audio").paused')
+        page.locator('#take-audio').evaluate('(audio) => audio.pause()')
+        page.wait_for_function('() => !state.busy')
+        expect(page.locator('#error-banner')).to_be_hidden()
         for width in [320, 390, 650, 1024, 1440]:
             page.set_viewport_size({'width': width, 'height': 900})
             page.wait_for_timeout(150)
@@ -222,7 +260,7 @@ def main():
         page.locator('.sentence-item').nth(21).click()
         expect(page.locator('#position-status')).to_have_text('H · 22 / 22')
         page.locator('#next').click()
-        expect(page.locator('#position-status')).to_have_text('M · 01 / 22')
+        expect(page.locator('#position-status')).to_have_text('M · 22 / 22')
         page.locator('#previous').click()
         expect(page.locator('#position-status')).to_have_text('H · 22 / 22')
         page.locator('#mode-m').click()
@@ -319,12 +357,45 @@ def main():
         old_page.locator('#export-dialog .close-dialog').click()
         old_page.locator('.sentence-item').nth(14).click()
         old_page.locator('#next').click()
-        expect(old_page.locator('#position-status')).to_have_text('M · 01 / 15')
+        expect(old_page.locator('#position-status')).to_have_text('M · 15 / 15')
         old_page.locator('#new-session').click()
         old_page.wait_for_function('() => state.script.sentences.length === 22')
         upgrade.close()
+        # Exercise end-of-participant auto-download with synthetic copies of the test WAV.
+        # No real participant data is used.
+        page.evaluate("""async () => {
+            const sample = state.takes[0];
+            state.takes = [];
+            state.session.selected = {};
+            for (const sentence of state.script.sentences) {
+                for (const condition of ['H', 'M']) {
+                    const take = {...sample, id: crypto.randomUUID(), sentenceId: sentence.id,
+                        text: sentence.text, condition, number: 1};
+                    await put('takes', take);
+                    state.takes.push(take);
+                    if (!(sentence.id === '22' && condition === 'M'))
+                        state.session.selected[condition + sentence.id] = take.id;
+                }
+            }
+            await moveTo(21, 'M');
+        }""")
+        expect(page.locator('#progress-text')).to_have_text('43 / 44')
+        with page.expect_download() as completed:
+            page.locator('#accept-next').click()
+        complete_zip = args.output / 'completed-participant.zip'
+        completed.value.save_as(complete_zip)
+        with zipfile.ZipFile(complete_zip) as archived:
+            pairs = list(csv.DictReader(io.StringIO(archived.read('pairs.csv').decode('utf-8-sig'))))
+            assert len(pairs) == 22 and all(row['complete'] == 'true' for row in pairs)
+            assert sum(name.endswith('.wav') for name in archived.namelist()) == 44
+        page.wait_for_function('() => !state.busy')
+        page.locator('#export-dialog .close-dialog').click()
+        page.reload()
+        page.wait_for_function('() => state.session && Object.keys(state.session.selected).length === 44')
+        expect(page.locator('[data-key="H22"]')).to_be_enabled()
+        expect(page.locator('[data-key="M22"]')).to_be_enabled()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '22 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts including all number/address sentences', 'H22/M01 navigation boundary', 'legacy 15-sentence recording upgrade and export', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '22 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'participant library playback', 'delete/cancel/persistence and selection cleanup', 'automatic completed-participant ZIP', 'responsive layouts including all number/address sentences', 'sentence-by-sentence H/M navigation', 'legacy 15-sentence recording upgrade and export', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

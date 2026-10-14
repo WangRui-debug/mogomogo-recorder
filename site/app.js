@@ -109,6 +109,7 @@ async function newSession() {
   render();
 }
 async function selectSession(id) {
+  state.sessions = await getAll('sessions');
   const selected = state.sessions.find((session) => session.id === id);
   if (!selected) throw new Error('セッションが見つかりません。');
   const script = sessionScript(selected);
@@ -198,7 +199,7 @@ function render() {
     button.addEventListener('click', () => action(() => moveTo(index, state.mode)));
     return button;
   }));
-  renderReview(); updateControls();
+  renderReview(); renderLibrary(); updateControls();
 }
 function renderReview() {
   $('take-audio').pause();
@@ -221,10 +222,76 @@ function renderReview() {
   $('quality-status').classList.toggle('warning', warnings.length > 0);
   $('quality-status').textContent = warnings.length ? warnings.join('。') : `${(take.sampleRate / 1000).toFixed(1)} kHz · WAV / 16-bit / mono · 内容を回聴してください`;
 }
+function renderLibrary() {
+  $('library-title').textContent = `${state.session.speakerId} の録音`;
+  $('library-count').textContent = `${state.takes.length}テイク`;
+  $('recording-list').replaceChildren(...state.script.sentences.map((sentence, index) => {
+    const row = document.createElement('div'); row.className = 'recording-row';
+    const label = document.createElement('span');
+    label.className = 'recording-label'; label.textContent = `${sentence.id}  ${sentence.text}`; label.title = sentence.text;
+    row.append(label);
+    for (const mode of ['H', 'M']) {
+      const takes = state.takes.filter((take) => take.sentenceId === sentence.id && take.condition === mode);
+      const selected = takes.find((take) => take.id === state.session.selected[mode + sentence.id]);
+      const take = selected || takes.sort((a, b) => a.number - b.number).at(-1);
+      const button = document.createElement('button'); button.className = 'library-play icon-button';
+      button.dataset.available = String(Boolean(take));
+      button.dataset.key = mode + sentence.id;
+      button.title = `${sentence.id} ${mode} · ${take ? (selected ? '採用テイクを再生' : '最新の未採用テイクを再生') : '未録音'}`;
+      button.setAttribute('aria-label', button.title);
+      button.classList.toggle('complete', Boolean(selected));
+      const icon = document.createElement('i'); icon.dataset.lucide = take ? 'play' : 'minus';
+      const condition = document.createElement('span'); condition.textContent = mode;
+      button.append(icon, condition);
+      button.onclick = () => action(async () => {
+        if (!take || state.unsaved) return;
+        await moveTo(index, mode);
+        state.viewTake = take.id; renderReview();
+        try { await $('take-audio').play(); }
+        catch (cause) { if (cause.name !== 'AbortError') throw cause; }
+      });
+      row.append(button);
+    }
+    return row;
+  }));
+  icons();
+}
+async function deleteTake() {
+  const take = chosenTake();
+  if (!take || !confirm(`${filename(take)} を削除しますか？元に戻せません。${state.session.selected[positionKey()] === take.id ? '採用も解除されます。' : ''}`)) return;
+  const session = structuredClone(state.session);
+  for (const [key, id] of Object.entries(session.selected)) {
+    if (id === take.id) delete session.selected[key];
+  }
+  // Delete audio and its selection together so exports cannot reference a missing take.
+  if (state.unsaved?.id !== take.id) {
+    await new Promise((resolve, reject) => {
+      const transaction = state.db.transaction(['takes', 'sessions'], 'readwrite');
+      transaction.objectStore('takes').delete(take.id);
+      transaction.objectStore('sessions').put(session);
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error('削除できませんでした。'));
+      transaction.onerror = () => {};
+    });
+  }
+  state.session = session;
+  state.takes = state.takes.filter((item) => item.id !== take.id);
+  if (state.unsaved?.id === take.id) { state.unsaved = null; error(''); }
+  state.viewTake = null; render();
+  toast('テイクを削除しました。');
+}
+function showExport() {
+  const count = Object.keys(state.session.selected).length;
+  $('export-summary').textContent = `${state.session.speakerId} · 採用済み ${count} / ${recordingCount()} 発話 · 録音 ${state.takes.length}テイク。${count < recordingCount() ? '未完了の状態でも保存できます。' : ''}`;
+  $('export-status').textContent = '';
+  if (!$('export-dialog').open) $('export-dialog').showModal();
+}
 function updateControls() {
   const lock = locked();
-  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'countdown-toggle']) $(id).disabled = lock;
+  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'delete-take', 'countdown-toggle']) $(id).disabled = lock;
   document.querySelectorAll('.sentence-item').forEach((button) => { button.disabled = lock; });
+  document.querySelectorAll('.library-play').forEach((button) => { button.disabled = lock || Boolean(state.unsaved) || button.dataset.available !== 'true'; });
+  $('delete-take').disabled = lock || !chosenTake();
   $('speaker-id').disabled = lock || state.takes.length > 0;
   if (state.unsaved) {
     for (const id of ['new-session', 'session-select', 'mode-h', 'mode-m', 'previous', 'next', 'take-select']) $(id).disabled = true;
@@ -254,8 +321,8 @@ async function moveTo(index, mode) {
   await saveSession(); render();
 }
 async function step(direction) {
-  const position = Math.max(0, Math.min(recordingCount() - 1, state.index + (state.mode === 'M' ? sentenceCount() : 0) + direction));
-  await moveTo(position % sentenceCount(), position >= sentenceCount() ? 'M' : 'H');
+  const position = Math.max(0, Math.min(recordingCount() - 1, state.index * 2 + (state.mode === 'M' ? 1 : 0) + direction));
+  await moveTo(Math.floor(position / 2), position % 2 ? 'M' : 'H');
 }
 
 async function enumerateMicrophones() {
@@ -536,11 +603,18 @@ function bindEvents() {
   });
   $('accept-next').onclick = () => action(async () => {
     const take = chosenTake(); if (!take || state.unsaved) return;
+    const wasComplete = Object.keys(state.session.selected).length === recordingCount();
     state.session.selected[positionKey()] = take.id; await saveSession();
-    if (Object.keys(state.session.selected).length === recordingCount()) toast(`${recordingCount()}発話の採用が完了しました。データを保存してください。`);
-    else if (state.mode === 'H' && state.index === sentenceCount() - 1) toast('次はもごもご発話です。読み方を確認してください。');
+    const complete = Object.keys(state.session.selected).length === recordingCount();
     await step(1);
+    if (complete && !wasComplete) {
+      toast('全発話を採用しました。ZIPの保存を開始します。');
+      $('include-all').checked = true;
+      showExport();
+      await exportZip();
+    }
   });
+  $('delete-take').onclick = () => action(deleteTake);
   $('download-take').onclick = () => { const take = chosenTake(); if (take) download(take.blob, filename(take)); };
   $('help-button').onclick = () => $('guide-dialog').showModal();
   $('practice-button').onclick = () => $('practice-dialog').showModal();
@@ -558,11 +632,7 @@ function bindEvents() {
     if (isRecording()) audio.pause();
     else document.querySelectorAll('audio').forEach((other) => { if (other !== audio) other.pause(); });
   }));
-  $('export-button').onclick = () => {
-    const count = Object.keys(state.session.selected).length;
-    $('export-summary').textContent = `${state.session.speakerId} · 採用済み ${count} / ${recordingCount()} 発話 · 録音 ${state.takes.length}テイク。${count < recordingCount() ? '未完了の状態でも保存できます。' : ''}`;
-    $('export-status').textContent = ''; $('export-dialog').showModal();
-  };
+  $('export-button').onclick = showExport;
   $('confirm-export').onclick = exportZip;
   window.addEventListener('beforeunload', (event) => {
     if (isRecording() || state.unsaved) { event.preventDefault(); event.returnValue = ''; }
@@ -577,10 +647,10 @@ function bindEvents() {
 async function initialize() {
   icons();
   try {
-    const response = await fetch('assets/script.json?v=20261014-1', { cache: 'no-store' });
+    const response = await fetch('assets/script.json?v=20261014-2', { cache: 'no-store' });
     if (!response.ok) throw new Error('原稿を取得できません。ページを再読み込みしてください。');
     state.latestScript = await response.json();
-    const legacyResponse = await fetch('assets/script-15.json?v=20261014-1', { cache: 'no-store' });
+    const legacyResponse = await fetch('assets/script-15.json?v=20261014-2', { cache: 'no-store' });
     if (!legacyResponse.ok) throw new Error('旧版原稿を取得できません。ページを再読み込みしてください。');
     state.scripts = [state.latestScript, await legacyResponse.json()];
     state.script = state.latestScript;
