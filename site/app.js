@@ -4,12 +4,18 @@
 const STORAGE_PREFIX = `mogomogo-public:${location.pathname.replace(/index\.html$/, '')}:`;
 const $ = (id) => document.getElementById(id);
 const state = {
-  db: null, script: null, session: null, sessions: [], takes: [], index: 0, mode: 'H',
+  db: null, script: null, latestScript: null, scripts: [], session: null, sessions: [], takes: [], index: 0, mode: 'H',
   viewTake: null, busy: false, phase: 'idle', purpose: null, capture: null,
   stream: null, context: null, node: null, analyser: null, source: null, mute: null,
   chunks: [], started: 0, autoStop: null, stopResolve: null, reviewURL: null,
   practiceURL: null, micSettings: null, tabBlocked: false, unsaved: null, attempt: 0,
 };
+const sentenceCount = () => state.script?.sentences.length || 0;
+const recordingCount = () => sentenceCount() * 2;
+const matchesScript = (script, hash) => script && (script.script_sha256 === hash || script.compatible_script_sha256?.includes(hash));
+function sessionScript(session) {
+  return [session.scriptSnapshot, ...state.scripts].find((script) => matchesScript(script, session.scriptSha256));
+}
 const positionKey = () => `${state.mode}${state.script.sentences[state.index].id}`;
 const isRecording = () => state.phase !== 'idle';
 const locked = () => isRecording() || state.busy || state.tabBlocked;
@@ -81,18 +87,20 @@ async function saveSession() {
 async function refreshSessions() {
   state.sessions = (await getAll('sessions')).sort((a, b) => b.created.localeCompare(a.created));
   $('session-select').replaceChildren(...state.sessions.map((session) => {
-    const label = `${session.speakerId} · ${new Date(session.created).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${session.id.slice(0, 4)}`;
+    const label = `${session.speakerId} · ${sessionScript(session)?.sentences.length || '?'}文 · ${new Date(session.created).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${session.id.slice(0, 4)}`;
     return new Option(label, session.id);
   }));
   $('session-select').value = state.session.id;
 }
 async function newSession() {
+  state.script = state.latestScript;
   const used = new Set(state.sessions.map((session) => session.speakerId));
   let number = 1;
   while (used.has(`spk${String(number).padStart(3, '0')}`)) number++;
   state.session = {
     id: crypto.randomUUID(), speakerId: `spk${String(number).padStart(3, '0')}`,
     created: new Date().toISOString(), scriptSha256: state.script.script_sha256,
+    scriptSnapshot: structuredClone(state.script),
     selected: {}, position: { index: 0, mode: 'H' },
   };
   state.index = 0; state.mode = 'H'; state.takes = []; state.viewTake = null;
@@ -101,10 +109,12 @@ async function newSession() {
   render();
 }
 async function selectSession(id) {
-  state.session = state.sessions.find((session) => session.id === id);
-  if (state.session.scriptSha256 !== state.script.script_sha256 && !state.script.compatible_script_sha256?.includes(state.session.scriptSha256)) {
-    throw new Error('原稿の版が異なります。元の原稿を戻してデータを保存してください。');
-  }
+  const selected = state.sessions.find((session) => session.id === id);
+  if (!selected) throw new Error('セッションが見つかりません。');
+  const script = sessionScript(selected);
+  if (!script) throw new Error('このセッションの原稿を読み込めません。担当者に確認してください。');
+  state.session = selected;
+  state.script = script;
   state.index = state.session.position.index;
   state.mode = state.session.position.mode;
   state.takes = await getAll('takes', id);
@@ -116,16 +126,27 @@ async function selectSession(id) {
 function rubyText(annotated) {
   const fragment = document.createDocumentFragment();
   const pattern = /([一-龯々〆ヵヶ]+)\(([^)]+)\)/g;
+  // Keep each number/letter group intact when the recording script wraps.
+  const appendPlain = (text) => {
+    let offset = 0;
+    for (const match of text.matchAll(/[0-9０-９A-Za-zＡ-Ｚａ-ｚ]+/g)) {
+      fragment.append(document.createTextNode(text.slice(offset, match.index)));
+      const token = document.createElement('span');
+      token.className = 'script-token'; token.textContent = match[0];
+      fragment.append(token); offset = match.index + match[0].length;
+    }
+    fragment.append(document.createTextNode(text.slice(offset)));
+  };
   let position = 0;
   for (const match of annotated.matchAll(pattern)) {
-    fragment.append(document.createTextNode(annotated.slice(position, match.index)));
+    appendPlain(annotated.slice(position, match.index));
     const ruby = document.createElement('ruby');
     ruby.append(document.createTextNode(match[1]));
     const rt = document.createElement('rt');
     rt.textContent = match[2]; ruby.append(rt); fragment.append(ruby);
     position = match.index + match[0].length;
   }
-  fragment.append(document.createTextNode(annotated.slice(position)));
+  appendPlain(annotated.slice(position));
   return fragment;
 }
 function currentTakes() {
@@ -140,8 +161,8 @@ function chosenTake() {
 function render() {
   const sentence = state.script.sentences[state.index];
   $('speaker-id').value = state.session.speakerId;
-  $('sentence-count').textContent = `原稿 ${sentence.id} / 15`;
-  $('position-status').textContent = `${state.mode} · ${sentence.id} / 15`;
+  $('sentence-count').textContent = `原稿 ${sentence.id} / ${sentenceCount()}`;
+  $('position-status').textContent = `${state.mode} · ${sentence.id} / ${sentenceCount()}`;
   $('mode-h').setAttribute('aria-pressed', String(state.mode === 'H'));
   $('mode-m').setAttribute('aria-pressed', String(state.mode === 'M'));
   $('mode-instruction').textContent = state.mode === 'H'
@@ -150,10 +171,13 @@ function render() {
   $('condition-label').textContent = state.mode === 'H' ? 'ハキハキ発話' : 'もごもご発話';
   $('condition-label').classList.toggle('m', state.mode === 'M');
   $('sentence-text').replaceChildren(rubyText(sentence.annotated));
-  $('pronunciation-note').textContent = notes[sentence.id] || 'ふりがなは読み方の補助です。二重に読まないでください。';
+  $('pronunciation-note').textContent = notes[sentence.id] || (state.index >= 15 ? '数字・英字は、HとMで同じ読み方にそろえてください。' : 'ふりがなは読み方の補助です。二重に読まないでください。');
   const count = Object.keys(state.session.selected).length;
-  $('progress-text').textContent = `${count} / 30`;
+  $('progress-text').textContent = `${count} / ${recordingCount()}`;
+  $('progress').max = recordingCount();
   $('progress').value = count;
+  $('script-summary').textContent = `通常発話・もごもご発話 / ${sentenceCount()}文`;
+  document.querySelectorAll('[data-script-count]').forEach((item) => { item.textContent = sentenceCount(); });
   $('sentence-list').replaceChildren(...state.script.sentences.map((item, index) => {
     const button = document.createElement('button');
     button.className = `sentence-item${index === state.index ? ' active' : ''}`;
@@ -216,7 +240,7 @@ function updateControls() {
   $('practice-stop').hidden = !isRecording() || state.purpose !== 'practice';
   $('practice-stop').disabled = state.phase === 'saving';
   $('previous').disabled ||= state.index === 0 && state.mode === 'H';
-  $('next').disabled ||= state.index === 14 && state.mode === 'M';
+  $('next').disabled ||= state.index === sentenceCount() - 1 && state.mode === 'M';
   document.body.classList.toggle('recording', state.phase === 'recording');
 }
 async function action(operation) {
@@ -230,8 +254,8 @@ async function moveTo(index, mode) {
   await saveSession(); render();
 }
 async function step(direction) {
-  const position = Math.max(0, Math.min(29, state.index + (state.mode === 'M' ? 15 : 0) + direction));
-  await moveTo(position % 15, position >= 15 ? 'M' : 'H');
+  const position = Math.max(0, Math.min(recordingCount() - 1, state.index + (state.mode === 'M' ? sentenceCount() : 0) + direction));
+  await moveTo(position % sentenceCount(), position >= sentenceCount() ? 'M' : 'H');
 }
 
 async function enumerateMicrophones() {
@@ -513,8 +537,8 @@ function bindEvents() {
   $('accept-next').onclick = () => action(async () => {
     const take = chosenTake(); if (!take || state.unsaved) return;
     state.session.selected[positionKey()] = take.id; await saveSession();
-    if (Object.keys(state.session.selected).length === 30) toast('30発話の採用が完了しました。データを保存してください。');
-    else if (state.mode === 'H' && state.index === 14) toast('次はもごもご発話です。読み方を確認してください。');
+    if (Object.keys(state.session.selected).length === recordingCount()) toast(`${recordingCount()}発話の採用が完了しました。データを保存してください。`);
+    else if (state.mode === 'H' && state.index === sentenceCount() - 1) toast('次はもごもご発話です。読み方を確認してください。');
     await step(1);
   });
   $('download-take').onclick = () => { const take = chosenTake(); if (take) download(take.blob, filename(take)); };
@@ -536,7 +560,7 @@ function bindEvents() {
   }));
   $('export-button').onclick = () => {
     const count = Object.keys(state.session.selected).length;
-    $('export-summary').textContent = `${state.session.speakerId} · 採用済み ${count} / 30 発話 · 録音 ${state.takes.length}テイク。${count < 30 ? '未完了の状態でも保存できます。' : ''}`;
+    $('export-summary').textContent = `${state.session.speakerId} · 採用済み ${count} / ${recordingCount()} 発話 · 録音 ${state.takes.length}テイク。${count < recordingCount() ? '未完了の状態でも保存できます。' : ''}`;
     $('export-status').textContent = ''; $('export-dialog').showModal();
   };
   $('confirm-export').onclick = exportZip;
@@ -553,14 +577,23 @@ function bindEvents() {
 async function initialize() {
   icons();
   try {
-    const response = await fetch('assets/script.json?v=20261009-1', { cache: 'no-store' });
+    const response = await fetch('assets/script.json?v=20261014-1', { cache: 'no-store' });
     if (!response.ok) throw new Error('原稿を取得できません。ページを再読み込みしてください。');
-    state.script = await response.json();
+    state.latestScript = await response.json();
+    const legacyResponse = await fetch('assets/script-15.json?v=20261014-1', { cache: 'no-store' });
+    if (!legacyResponse.ok) throw new Error('旧版原稿を取得できません。ページを再読み込みしてください。');
+    state.scripts = [state.latestScript, await legacyResponse.json()];
+    state.script = state.latestScript;
     state.db = await openDatabase();
     state.sessions = await getAll('sessions');
     const last = localStorage.getItem(STORAGE_PREFIX + 'current-session');
-    if (state.sessions.some((session) => session.id === last)) { await selectSession(last); await refreshSessions(); }
-    else await newSession();
+    const hasLatest = state.sessions.some((session) => matchesScript(state.latestScript, session.scriptSha256));
+    if (state.sessions.length && !hasLatest) {
+      await newSession();
+      toast('新しい原稿でセッションを作成しました。以前の録音はセッション一覧から確認できます。');
+    } else if (state.sessions.some((session) => session.id === last)) {
+      await selectSession(last); await refreshSessions();
+    } else await newSession();
     bindEvents(); draw();
     if (navigator.locks) navigator.locks.request(STORAGE_PREFIX + 'single-tab', { ifAvailable: true }, async (lock) => {
       if (!lock) {

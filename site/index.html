@@ -8,17 +8,17 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>もごもご音声収録</title>
-  <link rel="stylesheet" href="styles.css?v=20261009-1">
-  <link rel="stylesheet" href="public.css?v=20261009-1">
+  <link rel="stylesheet" href="styles.css?v=20261014-1">
+  <link rel="stylesheet" href="public.css?v=20261014-1">
   <script defer src="vendor/lucide.min.js"></script>
   <script defer src="vendor/jszip.min.js"></script>
-  <link rel="stylesheet" href="spectrum.css?v=20261009-1">
-  <script defer src="spectrum.js?v=20261009-1"></script>
-  <script defer src="app.js?v=20261009-1"></script>
+  <link rel="stylesheet" href="spectrum.css?v=20261014-1">
+  <script defer src="spectrum.js?v=20261014-1"></script>
+  <script defer src="app.js?v=20261014-1"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-icon"><i data-lucide="audio-lines"></i></span><div><strong>もごもご音声収録</strong><span>通常発話・もごもご発話 / 15文</span></div></div>
+    <div class="brand"><span class="brand-icon"><i data-lucide="audio-lines"></i></span><div><strong>もごもご音声収録</strong><span id="script-summary">通常発話・もごもご発話 / 22文</span></div></div>
     <div class="header-actions"><span id="storage-status" class="storage-status"><i data-lucide="hard-drive"></i>このブラウザに保存</span><button class="icon-button" id="help-button" title="収録のご案内" aria-label="収録のご案内"><i data-lucide="circle-help"></i></button><button id="export-button" class="button primary"><i data-lucide="download"></i><span>データを保存</span></button></div>
   </header>
   <div id="error-banner" class="banner error" role="alert" hidden></div>
@@ -28,7 +28,7 @@
         <div class="section-title"><h2>収録セッション</h2><button id="new-session" class="icon-button" title="新しいセッション" aria-label="新しいセッション"><i data-lucide="plus"></i></button></div>
         <label for="session-select">セッション</label><select id="session-select"></select>
         <label for="speaker-id">話者ID</label><input id="speaker-id" value="spk001" maxlength="32" pattern="[A-Za-z0-9_-]+" autocomplete="off" spellcheck="false">
-        <div class="progress-caption"><span>採用済み</span><strong id="progress-text">0 / 30</strong></div><progress id="progress" value="0" max="30"></progress>
+        <div class="progress-caption"><span>採用済み</span><strong id="progress-text">0 / 44</strong></div><progress id="progress" value="0" max="44"></progress>
       </section>
       <div class="list-heading"><h2>読み上げ原稿</h2><span><b class="h-text">H</b> / <b class="m-text">M</b></span></div>
       <nav id="sentence-list" aria-label="読み上げ原稿"></nav>
@@ -43,7 +43,7 @@
       <div class="main-columns">
         <div class="recording-column">
           <section class="reading-section">
-            <div class="reading-top"><span class="eyebrow" id="sentence-count">原稿 01 / 15</span><div class="segmented" aria-label="発話条件"><button id="mode-h" aria-pressed="true"><b>H</b> ハキハキ</button><button id="mode-m" aria-pressed="false"><b>M</b> もごもご</button></div></div>
+            <div class="reading-top"><span class="eyebrow" id="sentence-count">原稿 01 / 22</span><div class="segmented" aria-label="発話条件"><button id="mode-h" aria-pressed="true"><b>H</b> ハキハキ</button><button id="mode-m" aria-pressed="false"><b>M</b> もごもご</button></div></div>
             <p class="mode-instruction" id="mode-instruction"></p>
             <div class="script-heading"><span id="condition-label" class="condition-tag">ハキハキ発話</span><label class="check-label"><input id="furigana-toggle" type="checkbox" checked>ふりがな</label></div>
             <div id="sentence-text" class="sentence-text" lang="ja"></div>
@@ -78,7 +78,7 @@
               <button id="accept-next" class="button primary"><i data-lucide="check"></i><span>採用して次へ</span><i data-lucide="arrow-right"></i></button>
             </div>
           </section>
-          <footer class="sentence-navigation"><button id="previous" class="button quiet"><i data-lucide="arrow-left"></i>前へ</button><span id="position-status">H · 01 / 15</span><button id="next" class="button quiet">次へ<i data-lucide="arrow-right"></i></button></footer>
+          <footer class="sentence-navigation"><button id="previous" class="button quiet"><i data-lucide="arrow-left"></i>前へ</button><span id="position-status">H · 01 / 22</span><button id="next" class="button quiet">次へ<i data-lucide="arrow-right"></i></button></footer>
         </div>
         <aside class="guidance-column">
           <section class="guide-section"><h2>読み方</h2>
@@ -91,7 +91,7 @@
       </div>
     </main>
   </div>
-  <dialog id="guide-dialog"><div class="dialog-title"><h2>収録のご案内</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p>同じ15文を、ハキハキ発話（H）ともごもご発話（M）の2通りで読みます。原稿にはふりがなが付いています。</p><ol><li>読み方を確認し、担当者と短く練習します。</li><li>話者IDを確認し、マイクを接続します。</li><li>各文を録音し、回聴して採用します。</li><li>最後に「データを保存」からZIPをダウンロードし、担当者に渡してください。</li></ol><p>原稿では2通り合わせて5分以内が目安です。説明、練習、回聴、録り直しには別途時間がかかります。</p><p class="dialog-note">音声はこの端末のブラウザに保存され、サーバーには送信されません。この公開版にはログイン制限・Driveへの自動送信はありません。ブラウザのデータを削除する前に、必ずZIPを保存してください。</p><button class="button primary close-dialog">確認しました</button></dialog>
+  <dialog id="guide-dialog"><div class="dialog-title"><h2>収録のご案内</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p>同じ<span data-script-count>22</span>文を、ハキハキ発話（H）ともごもご発話（M）の2通りで読みます。原稿にはふりがなが付いています。</p><ol><li>読み方を確認し、担当者と短く練習します。</li><li>話者IDを確認し、マイクを接続します。</li><li>各文を録音し、回聴して採用します。</li><li>最後に「データを保存」からZIPをダウンロードし、担当者に渡してください。</li></ol><p>数字や住所も省略せず、HとMで同じ言葉・読み方にそろえてください。説明、練習、回聴、録り直しには別途時間がかかります。</p><p class="dialog-note">音声はこの端末のブラウザに保存され、サーバーには送信されません。この公開版にはログイン制限・Driveへの自動送信はありません。ブラウザのデータを削除する前に、必ずZIPを保存してください。</p><button class="button primary close-dialog">確認しました</button></dialog>
   <dialog id="practice-dialog"><div class="dialog-title"><h2>練習録音</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p>「今日は、よろしくお願いします。」</p><p class="muted">担当者と声の出し方を確認してください。練習音声は収録データに含まれません。</p><div class="practice-controls"><button id="practice-start" class="button primary"><i data-lucide="mic"></i>練習を録音</button><button id="practice-stop" class="button stop" hidden><i data-lucide="square"></i>停止</button></div><audio id="practice-audio" controls hidden></audio><div id="practice-state" role="status"></div></dialog>
   <dialog id="export-dialog"><div class="dialog-title"><h2>収録データを保存</h2><button class="icon-button close-dialog" aria-label="閉じる"><i data-lucide="x"></i></button></div><p id="export-summary"></p><label class="check-label"><input id="include-all" type="checkbox" checked>採用していないテイクも含める</label><p class="dialog-note">WAV、発話条件、原稿、評価、採用状況をZIPにまとめます。保存後はZIPを担当者に渡してください。</p><button id="confirm-export" class="button primary"><i data-lucide="download"></i><span>ZIPをダウンロード</span></button><p id="export-status" role="status"></p></dialog>
   <div id="toast" class="toast" role="status" hidden></div>

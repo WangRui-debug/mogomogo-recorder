@@ -6,7 +6,8 @@ import json
 import hashlib
 import math
 import struct
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
+import re
 from pathlib import Path
 import wave
 import zipfile
@@ -42,7 +43,7 @@ def main():
             .map(url => url.searchParams.get('v'))""")
         assert len(versions) == 5 and len(set(versions)) == 1 and versions[0], versions
         page.locator('#guide-dialog .primary').click()
-        page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 15')
+        page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
         assert page.locator('#sentence-text ruby').count() > 0
         assert page.locator('#reference-audio, #reference-file, .reference-section').count() == 0
         assert page.evaluate('() => !state.script.reference && !state.script.reference_sha256')
@@ -140,8 +141,8 @@ def main():
         assert page.locator('#take-select option').count() == 2
         page.locator('#take-select').select_option(index=0)
         page.locator('#accept-next').click()
-        page.wait_for_function('() => document.querySelector("#position-status").textContent === "H · 02 / 15"')
-        assert page.locator('#progress-text').inner_text() == '1 / 30'
+        page.wait_for_function('() => document.querySelector("#position-status").textContent === "H · 02 / 22"')
+        assert page.locator('#progress-text').inner_text() == '1 / 44'
         page.locator('.sentence-item').first.click()
         page.locator('#mode-m').click()
         instruction = '「自分の喋っている内容を相手に伝える気がない」喋り方をする人を演じて，相手に伝わらないほど不明瞭に喋ってください'
@@ -151,7 +152,7 @@ def main():
         page.locator('#rating').select_option('4')
         page.wait_for_timeout(100)
         page.locator('#accept-next').click()
-        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 30"')
+        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
         page.locator('#practice-button').click()
         page.locator('#practice-start').click()
         page.wait_for_function('() => document.body.classList.contains("recording")')
@@ -159,16 +160,14 @@ def main():
         page.locator('#practice-stop').click()
         page.wait_for_function('() => !document.querySelector("#practice-audio").hidden')
         page.locator('#practice-dialog .close-dialog').click()
-        # Prior instruction versions must remain readable without restoring old references.
+        # Obsolete reference metadata must not return in recording exports.
         page.evaluate("""async () => {
-            state.session.scriptSha256 = state.script.compatible_script_sha256[0];
-            await saveSession();
             state.takes[0].reference = {id: 'withdrawn', source: 'bundled'};
             await put('takes', state.takes[0]);
         }""")
         page.reload()
-        page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 15')
-        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 30"')
+        page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
+        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
         page.locator('#export-button').click()
         with page.expect_download() as download_info:
             page.locator('#confirm-export').click()
@@ -182,7 +181,7 @@ def main():
             first_h = next(row for row in rows if row['condition'] == 'H' and row['take'] == '1')
             assert first_h['mumbling_rating'] == '2' and first_h['note'] == 'テスト録音'
             pairs = list(csv.DictReader(io.StringIO(zipped.read('pairs.csv').decode('utf-8-sig'))))
-            assert len(pairs) == 15 and pairs[0]['complete'] == 'true'
+            assert len(pairs) == 22 and pairs[0]['complete'] == 'true'
             assert all(row['complete'] == 'false' for row in pairs[1:])
             assert pairs[0]['clean_wav'].endswith('H_take01.wav')
             assert pairs[0]['mumbling_wav'].endswith('M_take01.wav')
@@ -204,20 +203,31 @@ def main():
         page.screenshot(path=str(args.output / 'desktop-recorded.png'), full_page=True)
         original_session = page.locator('#session-select').input_value()
         page.locator('#new-session').click()
-        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "0 / 30"')
+        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "0 / 44"')
         page.locator('#session-select').select_option(original_session)
-        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 30"')
-        for width in [390, 650, 1024, 1440]:
+        page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
+        for width in [320, 390, 650, 1024, 1440]:
             page.set_viewport_size({'width': width, 'height': 900})
             page.wait_for_timeout(150)
             assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), width
-            for sentence in [0, 9, 10, 11, 14]:
+            for sentence in [0, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21]:
                 page.locator('.sentence-item').nth(sentence).click()
                 page.wait_for_timeout(100)
                 assert page.locator('#sentence-text').evaluate('(e) => e.scrollWidth <= e.clientWidth'), (width, sentence)
+                assert page.locator('.script-token').evaluate_all('(items) => items.every(e => e.getClientRects().length === 1)'), (width, sentence)
             if width == 390:
                 page.screenshot(path=str(args.output / 'mobile.png'), full_page=True)
         page.set_viewport_size({'width': 1440, 'height': 1050})
+        page.locator('#mode-h').click()
+        page.locator('.sentence-item').nth(21).click()
+        expect(page.locator('#position-status')).to_have_text('H · 22 / 22')
+        page.locator('#next').click()
+        expect(page.locator('#position-status')).to_have_text('M · 01 / 22')
+        page.locator('#previous').click()
+        expect(page.locator('#position-status')).to_have_text('H · 22 / 22')
+        page.locator('#mode-m').click()
+        expect(page.locator('#next')).to_be_disabled()
+        page.locator('#mode-h').click()
         page.locator('#enable-microphone').click()
         page.wait_for_function('() => !document.querySelector("#record-button").disabled')
         page.locator('#countdown-toggle').check()
@@ -264,8 +274,57 @@ def main():
             recovery_page.locator('#download-take').click()
         download_info.value.save_as(args.output / 'storage-failure-recovery.wav')
         recovery.close()
+        upgrade = browser.new_context(accept_downloads=True)
+        old_page = upgrade.new_page()
+        legacy = upgrade.request.get(urljoin(args.url, 'assets/script-15.json')).json()
+        current_url = re.compile(r'.*/assets/script\.json(?:\?.*)?$')
+        old_page.route(current_url, lambda route: route.fulfill(json=legacy))
+        old_page.goto(args.url)
+        old_page.locator('#guide-dialog .primary').click()
+        old_page.wait_for_function('() => state.script.sentences.length === 15')
+        old_page.locator('#enable-microphone').click()
+        old_page.wait_for_function('() => !document.querySelector("#record-button").disabled')
+        old_page.locator('#countdown-toggle').uncheck()
+        old_page.locator('#record-button').click()
+        old_page.wait_for_function('() => state.phase === "recording"')
+        old_page.wait_for_timeout(1100)
+        old_page.locator('#stop-button').click()
+        old_page.wait_for_function('() => state.phase === "idle" && state.takes.length === 1')
+        old_id = old_page.locator('#session-select').input_value()
+        old_page.evaluate("""async () => {
+            delete state.session.scriptSnapshot;
+            state.session.scriptSha256 = state.script.compatible_script_sha256[0];
+            await saveSession();
+        }""")
+        old_page.unroute(current_url)
+        old_page.reload()
+        old_page.wait_for_function('() => state.script.sentences.length === 22')
+        assert old_page.locator('#session-select option').count() == 2
+        assert old_page.locator('#progress-text').inner_text() == '0 / 44'
+        old_page.locator('#session-select').select_option(old_id)
+        old_page.wait_for_function('() => state.script.sentences.length === 15 && state.takes.length === 1')
+        expect(old_page.locator('#progress-text')).to_have_text('0 / 30')
+        assert old_page.locator('.sentence-item').count() == 15
+        old_page.locator('#export-button').click()
+        with old_page.expect_download() as old_download:
+            old_page.locator('#confirm-export').click()
+        legacy_zip = args.output / 'legacy-15-recording.zip'
+        old_download.value.save_as(legacy_zip)
+        with zipfile.ZipFile(legacy_zip) as archived:
+            old_pairs = list(csv.DictReader(io.StringIO(archived.read('pairs.csv').decode('utf-8-sig'))))
+            assert len(old_pairs) == 15
+            assert sum(name.endswith('.wav') for name in archived.namelist()) == 1
+            assert '全15文' in archived.read('script.txt').decode('utf-8')
+            assert '全22文' not in archived.read('script.txt').decode('utf-8')
+        old_page.locator('#export-dialog .close-dialog').click()
+        old_page.locator('.sentence-item').nth(14).click()
+        old_page.locator('#next').click()
+        expect(old_page.locator('#position-status')).to_have_text('M · 01 / 15')
+        old_page.locator('#new-session').click()
+        old_page.wait_for_function('() => state.script.sentences.length === 22')
+        upgrade.close()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '15 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '22 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'responsive layouts including all number/address sentences', 'H22/M01 navigation boundary', 'legacy 15-sentence recording upgrade and export', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
