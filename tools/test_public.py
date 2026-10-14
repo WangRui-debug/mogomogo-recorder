@@ -319,7 +319,7 @@ def main():
         old_page.route(current_url, lambda route: route.fulfill(json=legacy))
         old_page.goto(args.url)
         old_page.locator('#guide-dialog .primary').click()
-        old_page.wait_for_function('() => state.script.sentences.length === 15')
+        old_page.wait_for_function('() => state.session && state.script?.sentences.length === 15')
         old_page.locator('#enable-microphone').click()
         old_page.wait_for_function('() => !document.querySelector("#record-button").disabled')
         old_page.locator('#countdown-toggle').uncheck()
@@ -336,11 +336,11 @@ def main():
         }""")
         old_page.unroute(current_url)
         old_page.reload()
-        old_page.wait_for_function('() => state.script.sentences.length === 22')
+        old_page.wait_for_function('() => state.session && state.script?.sentences.length === 22')
         assert old_page.locator('#session-select option').count() == 2
         assert old_page.locator('#progress-text').inner_text() == '0 / 44'
         old_page.locator('#session-select').select_option(old_id)
-        old_page.wait_for_function('() => state.script.sentences.length === 15 && state.takes.length === 1')
+        old_page.wait_for_function('() => state.session && state.script?.sentences.length === 15 && state.takes.length === 1')
         expect(old_page.locator('#progress-text')).to_have_text('0 / 30')
         assert old_page.locator('.sentence-item').count() == 15
         old_page.locator('#export-button').click()
@@ -359,7 +359,7 @@ def main():
         old_page.locator('#next').click()
         expect(old_page.locator('#position-status')).to_have_text('M · 15 / 15')
         old_page.locator('#new-session').click()
-        old_page.wait_for_function('() => state.script.sentences.length === 22')
+        old_page.wait_for_function('() => state.session && state.script?.sentences.length === 22')
         upgrade.close()
         # Exercise end-of-participant auto-download with synthetic copies of the test WAV.
         # No real participant data is used.
