@@ -214,6 +214,10 @@ function renderReview() {
     `テイク ${item.number} · ${item.duration.toFixed(1)}秒${state.session.selected[positionKey()] === item.id ? ' · 採用' : ''}${state.unsaved?.id === item.id ? ' · 未保存' : ''}`, item.id)));
   $('take-select').value = take.id;
   state.reviewURL = URL.createObjectURL(take.blob); $('take-audio').src = state.reviewURL;
+  $('trim-take-toggle').checked = Boolean(take.tailTrimSeconds);
+  $('trim-status').textContent = take.tailTrimSeconds
+    ? '末尾0.3秒を除外 · 原音を保持'
+    : (take.originalWave?.duration || take.duration) < 1 ? '1秒未満の録音は自動で切りません。' : '原音（末尾処理なし）';
   $('rating').value = take.rating ?? ''; $('take-note').value = take.note;
   const warnings = [];
   if (take.duration < 1) warnings.push('録音が短いため、内容を確認してください');
@@ -288,10 +292,13 @@ function showExport() {
 }
 function updateControls() {
   const lock = locked();
-  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'delete-take', 'countdown-toggle']) $(id).disabled = lock;
+  for (const id of ['new-session', 'session-select', 'speaker-id', 'mode-h', 'mode-m', 'previous', 'next', 'take-select', 'rating', 'take-note', 'accept-next', 'enable-microphone', 'microphone-select', 'practice-button', 'export-button', 'help-button', 'download-take', 'delete-take', 'countdown-toggle', 'trim-stop-toggle', 'trim-take-toggle', 'download-original']) $(id).disabled = lock;
   document.querySelectorAll('.sentence-item').forEach((button) => { button.disabled = lock; });
   document.querySelectorAll('.library-play').forEach((button) => { button.disabled = lock || Boolean(state.unsaved) || button.dataset.available !== 'true'; });
   $('delete-take').disabled = lock || !chosenTake();
+  const review = chosenTake();
+  $('trim-take-toggle').disabled = lock || Boolean(state.unsaved) || !review || (review.originalWave?.duration || review.duration) < 1;
+  $('download-original').disabled = lock || !review?.originalWave;
   $('speaker-id').disabled = lock || state.takes.length > 0;
   if (state.unsaved) {
     for (const id of ['new-session', 'session-select', 'mode-h', 'mode-m', 'previous', 'next', 'take-select']) $(id).disabled = true;
@@ -395,7 +402,7 @@ async function startRecording(purpose) {
     if (attempt !== state.attempt) return;
     if (purpose === 'take') await saveSession();
     pausePlayers(); error('');
-    state.capture = { sentence: { ...state.script.sentences[state.index] }, condition: state.mode };
+    state.capture = { sentence: { ...state.script.sentences[state.index] }, condition: state.mode, trimStop: $('trim-stop-toggle').checked };
     if ($('countdown-toggle').checked && purpose === 'take') {
       $('countdown').hidden = false;
       for (let count = 3; count > 0; count--) {
@@ -439,7 +446,46 @@ function encodeWave(chunks, sampleRate) {
     rmsDb: 20 * Math.log10(Math.max(1e-10, Math.sqrt(power / Math.max(1, length)))), peak, clippedSamples,
   };
 }
-async function stopRecording() {
+const STOP_TRIM_SECONDS = 0.3;
+async function withStopTrim(take, enabled) {
+  const original = take.originalWave || Object.fromEntries(
+    ['blob', 'sampleRate', 'samples', 'duration', 'rmsDb', 'peak', 'clippedSamples'].map((key) => [key, take[key]]));
+  if (!enabled || original.duration < 1) return { ...take, ...original, tailTrimSeconds: 0 };
+  // Slice our PCM16 mono WAV without resampling. Keep the original for exact restoration.
+  const data = await original.blob.arrayBuffer();
+  const source = new DataView(data);
+  if (source.getUint16(20, true) !== 1 || source.getUint16(22, true) !== 1 ||
+      source.getUint16(34, true) !== 16 || source.getUint32(40, true) !== original.samples * 2 ||
+      data.byteLength !== 44 + original.samples * 2) throw new Error('このWAV形式は編集できません。');
+  const removed = Math.round(STOP_TRIM_SECONDS * original.sampleRate);
+  const samples = original.samples - removed;
+  const buffer = data.slice(0, 44 + samples * 2); const view = new DataView(buffer);
+  view.setUint32(4, 36 + samples * 2, true); view.setUint32(40, samples * 2, true);
+  let power = 0, peak = 0, clippedSamples = 0;
+  for (let index = 0; index < samples; index++) {
+    const value = view.getInt16(44 + index * 2, true);
+    const sample = value / (value < 0 ? 32768 : 32767);
+    power += sample * sample; peak = Math.max(peak, Math.abs(sample));
+    if (Math.abs(sample) >= 0.999) clippedSamples++;
+  }
+  return { ...take, originalWave: original, blob: new Blob([buffer], { type: 'audio/wav' }),
+    samples, duration: samples / original.sampleRate, tailTrimSeconds: removed / original.sampleRate,
+    rmsDb: 20 * Math.log10(Math.max(1e-10, Math.sqrt(power / samples))), peak, clippedSamples };
+}
+async function changeStopTrim() {
+  const take = chosenTake();
+  if (!take || state.unsaved) return;
+  try {
+    const updated = await withStopTrim(take, $('trim-take-toggle').checked);
+    await put('takes', updated);
+    state.takes[state.takes.findIndex((item) => item.id === take.id)] = updated;
+    render();
+  } catch (cause) { renderReview(); throw cause; }
+}
+function originalPath(take) {
+  return take.originalWave ? `originals/${take.condition}/${filename(take)}` : '';
+}
+async function stopRecording(manual = false) {
   if (state.phase === 'idle' || state.phase === 'saving') return;
   clearTimeout(state.autoStop);
   if (state.phase === 'countdown') {
@@ -463,12 +509,13 @@ async function stopRecording() {
       $('practice-state').textContent = `${wave.duration.toFixed(1)}秒 · 回聴して確認してください。`;
     } else {
       const previous = state.takes.filter((take) => take.sentenceId === state.capture.sentence.id && take.condition === state.capture.condition);
-      const take = {
+      let take = {
         ...wave, id: crypto.randomUUID(), sessionId: state.session.id, sentenceId: state.capture.sentence.id,
         text: state.capture.sentence.text, condition: state.capture.condition,
         number: Math.max(0, ...previous.map((item) => item.number)) + 1,
         recordedAt: state.capture.recordedAt, rating: null, note: '', deviceSettings: { ...state.micSettings },
       };
+      if (manual && state.capture.trimStop) take = await withStopTrim(take, true);
       state.takes.push(take); state.viewTake = take.id;
       try { await put('takes', take); }
       catch (cause) { state.unsaved = take; report(cause); }
@@ -503,11 +550,12 @@ async function exportZip() {
     const selected = new Set(Object.values(state.session.selected));
     const takes = state.takes.filter((take) => all || selected.has(take.id));
     if (!takes.length) throw new Error('保存対象がありません。録音するか、未採用テイクを含めてください。');
-    const manifest = [['speaker_id', 'session_id', 'sentence_id', 'condition', 'take', 'selected', 'wav_path', 'text', 'sample_rate', 'samples', 'duration_sec', 'mumbling_rating', 'note', 'recorded_at', 'rms_dbfs', 'peak', 'clipped_samples']];
+    const manifest = [['speaker_id', 'session_id', 'sentence_id', 'condition', 'take', 'selected', 'wav_path', 'text', 'sample_rate', 'samples', 'duration_sec', 'mumbling_rating', 'note', 'recorded_at', 'rms_dbfs', 'peak', 'clipped_samples', 'tail_trim_sec', 'original_wav_path', 'original_duration_sec']];
     for (const take of takes) {
       const path = `audio/${take.condition}/${filename(take)}`;
       zip.file(path, await take.blob.arrayBuffer());
-      manifest.push([state.session.speakerId, state.session.id, take.sentenceId, take.condition, take.number, selected.has(take.id), path, take.text, take.sampleRate, take.samples, take.duration, take.rating, take.note, take.recordedAt, take.rmsDb, take.peak, take.clippedSamples]);
+      if (take.originalWave) zip.file(originalPath(take), await take.originalWave.blob.arrayBuffer());
+      manifest.push([state.session.speakerId, state.session.id, take.sentenceId, take.condition, take.number, selected.has(take.id), path, take.text, take.sampleRate, take.samples, take.duration, take.rating, take.note, take.recordedAt, take.rmsDb, take.peak, take.clippedSamples, take.tailTrimSeconds || 0, originalPath(take), take.originalWave?.duration ?? take.duration]);
     }
     const pairs = [['speaker_id', 'sentence_id', 'text', 'clean_wav', 'mumbling_wav', 'complete']];
     for (const sentence of state.script.sentences) {
@@ -520,12 +568,15 @@ async function exportZip() {
     zip.file('session.json', JSON.stringify({
       ...state.session, exportedAt: new Date().toISOString(), appVersion: '1.0.0-public',
       scriptVersion: state.script.version, exportedScriptSha256: state.script.script_sha256, referencePolicy: 'No reference audio is provided or loaded.',
-      audioFormat: 'PCM16 mono WAV; browser AudioContext sample rate; no normalization or trimming',
+      audioFormat: 'PCM16 mono WAV; browser AudioContext sample rate; no normalization; optional 0.3-second end trim with original preserved',
       alignment: 'Same text only. Recordings are not frame-aligned.',
       userAgent: navigator.userAgent,
-      takes: takes.map(({ blob, reference, ...metadata }) => ({ ...metadata, file: `audio/${metadata.condition}/${filename(metadata)}` })),
+      takes: takes.map(({ blob, reference, originalWave, ...metadata }) => ({
+        ...metadata, file: `audio/${metadata.condition}/${filename(metadata)}`,
+        original: originalWave ? { ...Object.fromEntries(Object.entries(originalWave).filter(([key]) => key !== 'blob')), file: originalPath({ ...metadata, originalWave }) } : null,
+      })),
     }, null, 2));
-    zip.file('README.txt', 'H = 通常のハキハキ発話 / clear speech\nM = もごもご発話 / mumbled speech\nmanifest.csv: all exported takes; selected=true identifies accepted takes.\npairs.csv: accepted same-text pairs only; empty paths indicate missing selections.\nThe two conditions are NOT time-aligned. No loudness normalization or silence trimming was applied.\nMumbling rating is optional participant self-report, not an objective score.\nReference and practice audio are not included. Keep these recordings within the approved research scope.\n');
+    zip.file('README.txt', 'H = 通常のハキハキ発話 / clear speech\nM = もごもご発話 / mumbled speech\nmanifest.csv: all exported takes; selected=true identifies accepted takes.\npairs.csv: accepted same-text pairs only; empty paths indicate missing selections.\nThe two conditions are NOT time-aligned. No loudness normalization was applied. Optional fixed end trimming is recorded in tail_trim_sec; original_wav_path points to the unmodified backup. pairs.csv points to the current reviewed version. This is NOT automatic click detection or speech alignment.\nMumbling rating is optional participant self-report, not an objective score.\nReference and practice audio are not included. Keep these recordings within the approved research scope.\n');
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (metadata) => {
       $('export-status').textContent = `作成中 ${Math.round(metadata.percent)}%`;
     });
@@ -593,8 +644,8 @@ function bindEvents() {
   $('enable-microphone').onclick = () => action(() => state.stream ? disconnectMicrophone() : connectMicrophone());
   $('microphone-select').onchange = () => action(async () => { if (state.stream) await connectMicrophone(); });
   $('record-button').onclick = () => startRecording('take');
-  $('stop-button').onclick = stopRecording;
-  $('take-select').onchange = () => { if (!locked()) { state.viewTake = $('take-select').value; renderReview(); } };
+  $('stop-button').onclick = () => stopRecording(true);
+  $('take-select').onchange = () => { if (!locked()) { state.viewTake = $('take-select').value; renderReview(); updateControls(); } };
   $('rating').onchange = () => action(async () => {
     const take = chosenTake(); take.rating = $('rating').value ? Number($('rating').value) : null; await put('takes', take);
   });
@@ -614,12 +665,17 @@ function bindEvents() {
       await exportZip();
     }
   });
+  $('trim-take-toggle').onchange = () => action(changeStopTrim);
+  $('download-original').onclick = () => {
+    const take = chosenTake();
+    if (take?.originalWave) download(take.originalWave.blob, filename(take).replace('.wav', '__original.wav'));
+  };
   $('delete-take').onclick = () => action(deleteTake);
   $('download-take').onclick = () => { const take = chosenTake(); if (take) download(take.blob, filename(take)); };
   $('help-button').onclick = () => $('guide-dialog').showModal();
   $('practice-button').onclick = () => $('practice-dialog').showModal();
   $('practice-start').onclick = () => startRecording('practice');
-  $('practice-stop').onclick = stopRecording;
+  $('practice-stop').onclick = () => stopRecording();
   $('practice-dialog').addEventListener('cancel', (event) => { if (isRecording()) event.preventDefault(); });
   $('export-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
   document.querySelectorAll('.close-dialog').forEach((button) => {
@@ -647,10 +703,10 @@ function bindEvents() {
 async function initialize() {
   icons();
   try {
-    const response = await fetch('assets/script.json?v=20261014-2', { cache: 'no-store' });
+    const response = await fetch('assets/script.json?v=20261015-1', { cache: 'no-store' });
     if (!response.ok) throw new Error('原稿を取得できません。ページを再読み込みしてください。');
     state.latestScript = await response.json();
-    const legacyResponse = await fetch('assets/script-15.json?v=20261014-2', { cache: 'no-store' });
+    const legacyResponse = await fetch('assets/script-15.json?v=20261015-1', { cache: 'no-store' });
     if (!legacyResponse.ok) throw new Error('旧版原稿を取得できません。ページを再読み込みしてください。');
     state.scripts = [state.latestScript, await legacyResponse.json()];
     state.script = state.latestScript;

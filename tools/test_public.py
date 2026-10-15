@@ -43,6 +43,7 @@ def main():
             .map(url => url.searchParams.get('v'))""")
         assert len(versions) == 4 + page.locator('link[href^="public.css"]').count() and len(set(versions)) == 1 and versions[0], versions
         page.locator('#guide-dialog .primary').click()
+        page.locator('#trim-stop-toggle').uncheck()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
         assert page.locator('#sentence-text ruby').count() > 0
         assert page.locator('#reference-audio, #reference-file, .reference-section').count() == 0
@@ -319,6 +320,7 @@ def main():
         old_page.route(current_url, lambda route: route.fulfill(json=legacy))
         old_page.goto(args.url)
         old_page.locator('#guide-dialog .primary').click()
+        old_page.locator('#trim-stop-toggle').uncheck()
         old_page.wait_for_function('() => state.session && state.script?.sentences.length === 15')
         old_page.locator('#enable-microphone').click()
         old_page.wait_for_function('() => !document.querySelector("#record-button").disabled')
@@ -394,8 +396,92 @@ def main():
         page.wait_for_function('() => state.session && Object.keys(state.session.selected).length === 44')
         expect(page.locator('[data-key="H22"]')).to_be_enabled()
         expect(page.locator('[data-key="M22"]')).to_be_enabled()
+        # Verify default trimming on real stop events, reversible edits and original exports.
+        trimming = browser.new_context(accept_downloads=True)
+        trim_page = trimming.new_page()
+        trim_page.goto(args.url)
+        trim_page.locator('#guide-dialog .primary').click()
+        expect(trim_page.locator('#trim-stop-toggle')).to_be_checked()
+        trim_page.locator('#enable-microphone').click()
+        trim_page.wait_for_function('() => !document.querySelector("#record-button").disabled')
+        trim_page.locator('#countdown-toggle').uncheck()
+        trim_page.locator('#record-button').click()
+        trim_page.wait_for_function('() => state.phase === "recording"')
+        trim_page.wait_for_timeout(1600)
+        trim_page.locator('#stop-button').click()
+        trim_page.wait_for_function('() => state.takes.length === 1 && state.phase === "idle"')
+        assert trim_page.evaluate('() => chosenTake().originalWave.samples - chosenTake().samples === Math.round(chosenTake().sampleRate * 0.3)')
+        expect(trim_page.locator('#trim-take-toggle')).to_be_checked()
+        # Exact PCM prefix and restoration: no speech samples before the cut are modified.
+        assert trim_page.evaluate("""async () => {
+            const take = chosenTake();
+            const original = new Uint8Array(await take.originalWave.blob.arrayBuffer());
+            const trimmed = new Uint8Array(await take.blob.arrayBuffer());
+            return trimmed.slice(44).every((sample, i) => sample === original[44 + i]);
+        }""")
+        trim_page.locator('#trim-take-toggle').uncheck()
+        trim_page.wait_for_function('() => !state.busy && chosenTake().tailTrimSeconds === 0')
+        assert trim_page.evaluate('() => chosenTake().samples === chosenTake().originalWave.samples')
+        trim_page.locator('#trim-take-toggle').check()
+        trim_page.wait_for_function('() => !state.busy && chosenTake().tailTrimSeconds > 0')
+        # Reapplying does not repeatedly shorten the recording.
+        assert trim_page.evaluate('() => chosenTake().originalWave.samples - chosenTake().samples === Math.round(chosenTake().sampleRate * 0.3)')
+        trim_page.reload()
+        trim_page.wait_for_function('() => state.takes.length === 1')
+        expect(trim_page.locator('#trim-take-toggle')).to_be_checked()
+        with trim_page.expect_download() as original_download:
+            trim_page.locator('#download-original').click()
+        original_download.value.save_as(args.output / 'trim-original.wav')
+        for width in [320, 390, 1440]:
+            trim_page.set_viewport_size({'width': width, 'height': 950})
+            assert trim_page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            trim_page.locator('.review-section').screenshot(path=str(args.output / f'trim-review-{width}.png'))
+        trim_page.locator('#accept-next').click()
+        expect(trim_page.locator('#position-status')).to_have_text('M · 01 / 22')
+        trim_page.locator('#export-button').click()
+        with trim_page.expect_download() as trim_download:
+            trim_page.locator('#confirm-export').click()
+        trim_zip = args.output / 'tail-trim.zip'
+        trim_download.value.save_as(trim_zip)
+        with zipfile.ZipFile(trim_zip) as archived:
+            rows = list(csv.DictReader(io.StringIO(archived.read('manifest.csv').decode('utf-8-sig'))))
+            assert len(rows) == 1 and float(rows[0]['tail_trim_sec']) == 0.3
+            pairs = list(csv.DictReader(io.StringIO(archived.read('pairs.csv').decode('utf-8-sig'))))
+            assert pairs[0]['clean_wav'] == rows[0]['wav_path']
+            raw = archived.read(rows[0]['original_wav_path'])
+            processed = archived.read(rows[0]['wav_path'])
+            assert raw == (args.output / 'trim-original.wav').read_bytes()
+            with wave.open(io.BytesIO(raw)) as original, wave.open(io.BytesIO(processed)) as edited:
+                assert original.getnframes() - edited.getnframes() == round(original.getframerate() * 0.3)
+                assert edited.readframes(edited.getnframes()) == original.readframes(edited.getnframes())
+            meta = json.loads(archived.read('session.json'))
+            assert 'blob' not in meta['takes'][0]['original']
+        trim_page.locator('#export-dialog .close-dialog').click()
+        # Synthetic terminal click is removed; short clips are left intact.
+        assert trim_page.evaluate("""async () => {
+            const samples = new Float32Array(48000 * 2);
+            samples[48000 * 2 - 100] = 1;
+            const original = encodeWave([samples], 48000);
+            const edited = await withStopTrim(original, true);
+            const restored = await withStopTrim(edited, false);
+            const short = encodeWave([new Float32Array(4800)], 48000);
+            const untouched = await withStopTrim(short, true);
+            return edited.peak === 0 && restored.peak === 1 &&
+                restored.samples === original.samples && untouched.samples === short.samples &&
+                untouched.tailTrimSeconds === 0;
+        }""")
+        trim_page.locator('#enable-microphone').click()
+        trim_page.wait_for_function('() => !document.querySelector("#record-button").disabled')
+        trim_page.locator('#countdown-toggle').uncheck()
+        trim_page.locator('#record-button').click()
+        trim_page.wait_for_function('() => state.phase === "recording"')
+        trim_page.wait_for_timeout(1200)
+        trim_page.evaluate('() => stopRecording()')
+        trim_page.wait_for_function('() => state.phase === "idle" && state.takes.length === 2')
+        assert trim_page.evaluate('() => !chosenTake().originalWave && !chosenTake().tailTrimSeconds')
+        trimming.close()
         browser.close()
-        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '22 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'participant library playback', 'delete/cancel/persistence and selection cleanup', 'automatic completed-participant ZIP', 'responsive layouts including all number/address sentences', 'sentence-by-sentence H/M navigation', 'legacy 15-sentence recording upgrade and export', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
+        print(json.dumps({'status': 'passed', 'checks': ['no reference player or audio requests', 'legacy sessions retained without reference metadata', 'no upload requests', 'project-subpath URLs', '22 sentences with ruby', 'PCM16 recording', 'retakes', 'ratings and notes', 'selected H/M pair', 'practice excluded', 'reload recovery', 'ZIP and CSV', 'session switching', 'participant library playback', 'delete/cancel/persistence and selection cleanup', 'automatic completed-participant ZIP', 'reversible stop-click trim with original ZIP backup', 'terminal click removed without modifying retained PCM', 'responsive layouts including all number/address sentences', 'sentence-by-sentence H/M navigation', 'legacy 15-sentence recording upgrade and export', 'countdown cancellation', 'single tab lock', 'microphone denial', 'storage-failure WAV recovery', 'nonblank waveform', 'versioned assets bypass stale recorder cache', 'live microphone FFT before test injection', 'live FFT tone peaks and heatmap pixels', 'spectrum view switching', 'disconnect clears spectrum', 'desktop/mobile spectrum canvases'], 'screenshots': str(args.output)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

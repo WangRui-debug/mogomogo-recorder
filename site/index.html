@@ -8,13 +8,13 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>もごもご音声収録</title>
-  <link rel="stylesheet" href="styles.css?v=20261014-2">
-  <link rel="stylesheet" href="public.css?v=20261014-2">
+  <link rel="stylesheet" href="styles.css?v=20261015-1">
+  <link rel="stylesheet" href="public.css?v=20261015-1">
   <script defer src="vendor/lucide.min.js"></script>
   <script defer src="vendor/jszip.min.js"></script>
-  <link rel="stylesheet" href="spectrum.css?v=20261014-2">
-  <script defer src="spectrum.js?v=20261014-2"></script>
-  <script defer src="app.js?v=20261014-2"></script>
+  <link rel="stylesheet" href="spectrum.css?v=20261015-1">
+  <script defer src="spectrum.js?v=20261015-1"></script>
+  <script defer src="app.js?v=20261015-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -64,6 +64,8 @@
                 <div id="frequency-legend" class="frequency-legend" aria-label="色の強度範囲: -100から-20 dB">−100<span aria-hidden="true"></span>−20 dB</div>
               </section>
               <div class="record-controls"><button id="record-button" class="button record" disabled><i data-lucide="mic"></i><span>録音する</span></button><button id="stop-button" class="button stop" hidden><i data-lucide="square"></i><span>停止</span></button><label class="check-label"><input id="countdown-toggle" type="checkbox" checked>3秒カウント</label></div>
+              <label class="check-label"><input id="trim-stop-toggle" type="checkbox" checked>停止クリック対策（末尾0.3秒を除く）</label>
+              <p class="muted">読み終えて1秒ほど待ってから停止してください。語尾が切れた場合は回聴欄で処理を解除できます。</p>
               <div id="countdown" class="countdown" hidden aria-live="assertive"></div>
             </div>
           </section>
@@ -73,6 +75,8 @@
             <div id="review-content" hidden>
               <div class="take-row"><select id="take-select" aria-label="テイク"></select><button class="icon-button" id="download-take" title="このテイクを保存" aria-label="このテイクを保存"><i data-lucide="download"></i></button><button class="icon-button danger" id="delete-take" title="このテイクを削除" aria-label="このテイクを削除"><i data-lucide="trash-2"></i></button></div>
               <audio id="take-audio" controls preload="metadata"></audio>
+              <div class="take-row"><label class="check-label"><input id="trim-take-toggle" type="checkbox">末尾0.3秒を除く</label><button class="icon-button" id="download-original" title="未処理の原音を保存" aria-label="未処理の原音を保存"><i data-lucide="file-audio"></i></button></div>
+              <p id="trim-status" class="muted" role="status"></p>
               <div id="quality-status" class="quality-status"></div>
               <div class="review-fields"><label>もごもご度（自己評価・任意）<select id="rating"><option value="">未評価</option><option value="1">1 · ほとんどない</option><option value="2">2 · ややある</option><option value="3">3 · 中程度</option><option value="4">4 · 強い</option><option value="5">5 · とても強い</option></select></label><label>メモ（任意）<input id="take-note" maxlength="300" placeholder="読み間違い・周囲の音など"></label></div>
               <button id="accept-next" class="button primary"><i data-lucide="check"></i><span>採用して次へ</span><i data-lucide="arrow-right"></i></button>
