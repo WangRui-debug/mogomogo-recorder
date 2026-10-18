@@ -168,7 +168,7 @@ function render() {
   $('mode-m').setAttribute('aria-pressed', String(state.mode === 'M'));
   $('mode-instruction').textContent = state.mode === 'H'
     ? '普段の会話のように、相手に伝わるようにはっきり読んでください。'
-    : '「自分の喋っている内容を相手に伝える気がない」喋り方をする人を演じて，相手に伝わらないほど不明瞭に喋ってください';
+    : $('mumbling-guide').textContent;
   $('condition-label').textContent = state.mode === 'H' ? 'ハキハキ発話' : 'もごもご発話';
   $('condition-label').classList.toggle('m', state.mode === 'M');
   $('sentence-text').replaceChildren(rubyText(sentence.annotated));
@@ -703,10 +703,11 @@ function bindEvents() {
 async function initialize() {
   icons();
   try {
-    const response = await fetch('assets/script.json?v=20261015-1', { cache: 'no-store' });
+    const response = await fetch('assets/script.json?v=20261018-1', { cache: 'no-store' });
     if (!response.ok) throw new Error('原稿を取得できません。ページを再読み込みしてください。');
     state.latestScript = await response.json();
-    const legacyResponse = await fetch('assets/script-15.json?v=20261015-1', { cache: 'no-store' });
+    $('mumbling-guide').textContent = state.latestScript.mumbling_instruction?.join('\n') || $('mumbling-guide').innerText;
+    const legacyResponse = await fetch('assets/script-15.json?v=20261018-1', { cache: 'no-store' });
     if (!legacyResponse.ok) throw new Error('旧版原稿を取得できません。ページを再読み込みしてください。');
     state.scripts = [state.latestScript, await legacyResponse.json()];
     state.script = state.latestScript;

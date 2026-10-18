@@ -46,6 +46,16 @@ def main():
         page.locator('#trim-stop-toggle').uncheck()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
         assert page.locator('#sentence-text ruby').count() > 0
+        page.locator('.sentence-item').nth(15).click()
+        expect(page.locator('#sentence-text rt')).to_have_text(['ちゅうもん', 'ばんごう', 'しょうひん', 'きんがく'])
+        assert page.evaluate('state.script.sentences[15].text') == '注文番号は0123 456 789で、商品の金額は８９２５円 です。'
+        for width in [320, 390, 1440]:
+            page.set_viewport_size({'width': width, 'height': 950})
+            page.locator('#mode-m').click()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            page.locator('.reading-section').screenshot(path=str(args.output / f'instructions-sentence16-{width}.png'))
+        page.locator('#mode-h').click()
+        page.locator('.sentence-item').first.click()
         assert page.locator('#reference-audio, #reference-file, .reference-section').count() == 0
         assert page.evaluate('() => !state.script.reference && !state.script.reference_sha256')
         page.screenshot(path=str(args.output / 'desktop-ready.png'), full_page=True)
@@ -146,7 +156,7 @@ def main():
         assert page.locator('#progress-text').inner_text() == '1 / 44'
         page.locator('.sentence-item').first.click()
         page.locator('#mode-m').click()
-        instruction = '「自分の喋っている内容を相手に伝える気がない」喋り方をする人を演じて，相手に伝わらないほど不明瞭に喋ってください'
+        instruction = "口の開きや舌の動きを普段より少し小さくし、力を抜いて読んでください。\n一音一音をはっきり発音するよりも、音が少しつながるような、やや曖昧な発音を意識してください。\n声の大きさや速さは、普段どおりを目安にしてください。\n収録前に短く練習し、担当者と話し方を確認します。"
         expect(page.locator('#mode-instruction')).to_have_text(instruction)
         expect(page.locator('.guide-entry').nth(1).locator('p')).to_have_text(instruction)
         record()
@@ -362,6 +372,31 @@ def main():
         expect(old_page.locator('#position-status')).to_have_text('M · 15 / 15')
         old_page.locator('#new-session').click()
         old_page.wait_for_function('() => state.session && state.script?.sentences.length === 22')
+        # Older 22-sentence sessions carry their own script snapshot, even after a guide update.
+        old_page.evaluate("""async () => {
+            const snapshot = structuredClone(state.script);
+            snapshot.source_text = 'Previous instruction edition\\n' + snapshot.source_text;
+            const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(snapshot.source_text));
+            snapshot.script_sha256 = [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
+            snapshot.version = 'student22-prior-instructions';
+            const priorTakes = await getAll('takes');
+            const take = {...priorTakes[0], id: crypto.randomUUID(), sessionId: state.session.id};
+            await put('takes', take);
+            state.session.scriptSnapshot = snapshot;
+            state.session.scriptSha256 = snapshot.script_sha256;
+            state.session.selected = {H01: take.id};
+            await saveSession();
+        }""")
+        previous_22 = old_page.locator('#session-select').input_value()
+        old_page.reload()
+        old_page.wait_for_function('() => state.script?.version === "student22-prior-instructions" && state.takes.length === 1')
+        old_page.locator('#new-session').click()
+        old_page.wait_for_function('() => state.script?.version !== "student22-prior-instructions" && document.querySelectorAll("#session-select option").length === 4')
+        old_page.locator('#session-select').select_option(previous_22)
+        old_page.wait_for_function('() => state.script?.version === "student22-prior-instructions" && state.takes.length === 1')
+        expect(old_page.locator('#progress-text')).to_have_text('1 / 44')
+        expect(old_page.locator('[data-key="H01"]')).to_be_enabled()
+        assert old_page.evaluate('state.script.source_text.startsWith("Previous instruction edition")')
         upgrade.close()
         # Exercise end-of-participant auto-download with synthetic copies of the test WAV.
         # No real participant data is used.

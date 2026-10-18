@@ -41,6 +41,9 @@ def main():
     assert len(script['sentences']) == 22
     assert [s['id'] for s in script['sentences']] == [f'{i:02d}' for i in range(1, 23)]
     assert not script['compatible_script_sha256']
+    assert script['mumbling_instruction'] == ["口の開きや舌の動きを普段より少し小さくし、力を抜いて読んでください。","一音一音をはっきり発音するよりも、音が少しつながるような、やや曖昧な発音を意識してください。","声の大きさや速さは、普段どおりを目安にしてください。","収録前に短く練習し、担当者と話し方を確認します。"]
+    assert script['sentences'][15]['annotated'] == "注文(ちゅうもん)番号(ばんごう)は0123 456 789で、商品(しょうひん)の金額(きんがく)は８９２５円 です。"
+    assert script['sentences'][15]['text'] == '注文番号は0123 456 789で、商品の金額は８９２５円 です。'
     legacy = json.loads((SITE / 'assets/script-15.json').read_text(encoding='utf-8'))
     assert len(legacy['sentences']) == 15
     assert legacy['sentences'] == script['sentences'][:15]

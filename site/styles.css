@@ -15,3 +15,4 @@
 .danger{color:var(--red)}
 .take-row select{flex:1;min-width:0}
 @media(max-width:1100px){.recording-library{grid-column:1/-1}}
+#mode-instruction,#mumbling-guide{white-space:pre-line}
