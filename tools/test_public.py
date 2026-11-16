@@ -41,7 +41,7 @@ def main():
             .map(el => new URL(el.src || el.href))
             .filter(url => /\\/(app|spectrum)\\.js$|\\/(styles|public|spectrum)\\.css$/.test(url.pathname))
             .map(url => url.searchParams.get('v'))""")
-        assert len(versions) == 4 + page.locator('link[href^="public.css"]').count() and len(set(versions)) == 1 and versions[0], versions
+        assert len(versions) == 4 + page.locator('link[href^="public.css"]').count() and all(versions), versions
         page.locator('#guide-dialog .primary').click()
         page.locator('#trim-stop-toggle').uncheck()
         page.wait_for_function('() => document.querySelectorAll(".sentence-item").length === 22')
@@ -136,7 +136,9 @@ def main():
         record()
         assert page.locator('#take-select option').count() == 1
         page.locator('#rating').select_option('2')
-        page.wait_for_timeout(100)
+        page.locator('#rater-id').fill('staff01')
+        page.locator('#save-rating').click()
+        page.wait_for_function('() => !state.busy && assessmentFor(chosenTake())?.level === 2')
         page.locator('#take-note').fill('テスト録音')
         page.locator('#take-note').blur()
         page.wait_for_timeout(100)
@@ -161,7 +163,8 @@ def main():
         expect(page.locator('.guide-entry').nth(1).locator('p')).to_have_text(instruction)
         record()
         page.locator('#rating').select_option('4')
-        page.wait_for_timeout(100)
+        page.locator('#save-rating').click()
+        page.wait_for_function('() => !state.busy && assessmentFor(chosenTake())?.level === 4')
         page.locator('#accept-next').click()
         page.wait_for_function('() => document.querySelector("#progress-text").textContent === "2 / 44"')
         expect(page.locator('#position-status')).to_have_text('H · 02 / 22')
@@ -191,9 +194,12 @@ def main():
             rows = list(csv.DictReader(io.StringIO(zipped.read('manifest.csv').decode('utf-8-sig'))))
             assert len(rows) == 3 and sum(row['selected'] == 'true' for row in rows) == 2
             first_h = next(row for row in rows if row['condition'] == 'H' and row['take'] == '1')
-            assert first_h['mumbling_rating'] == '2' and first_h['note'] == 'テスト録音'
+            assert first_h['mumbling_rating'] == '' and first_h['note'] == 'テスト録音'
+            assert first_h['mumbling_label'] == '2' and first_h['rater_id'] == 'staff01'
             pairs = list(csv.DictReader(io.StringIO(zipped.read('pairs.csv').decode('utf-8-sig'))))
             assert len(pairs) == 22 and pairs[0]['complete'] == 'true'
+            assert pairs[0]['h_mumbling_label'] == '2' and pairs[0]['m_mumbling_label'] == '4'
+            assert pairs[0]['labels_complete'] == 'true'
             assert all(row['complete'] == 'false' for row in pairs[1:])
             assert pairs[0]['clean_wav'].endswith('H_take01.wav')
             assert pairs[0]['mumbling_wav'].endswith('M_take01.wav')
@@ -414,9 +420,14 @@ def main():
                         state.session.selected[condition + sentence.id] = take.id;
                 }
             }
+            renderAssessment();
             await moveTo(21, 'M');
         }""")
         expect(page.locator('#progress-text')).to_have_text('43 / 44')
+        page.locator('#rater-id').fill('staff01')
+        page.locator('#rating').select_option('3')
+        page.locator('#save-rating').click()
+        page.wait_for_function('() => !state.busy')
         with page.expect_download() as completed:
             page.locator('#accept-next').click()
         complete_zip = args.output / 'completed-participant.zip'
@@ -471,6 +482,10 @@ def main():
             trim_page.set_viewport_size({'width': width, 'height': 950})
             assert trim_page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             trim_page.locator('.review-section').screenshot(path=str(args.output / f'trim-review-{width}.png'))
+        trim_page.locator('#rater-id').fill('staff02')
+        trim_page.locator('#rating').select_option('2')
+        trim_page.locator('#save-rating').click()
+        trim_page.wait_for_function('() => !state.busy')
         trim_page.locator('#accept-next').click()
         expect(trim_page.locator('#position-status')).to_have_text('M · 01 / 22')
         trim_page.locator('#export-button').click()

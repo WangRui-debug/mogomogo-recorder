@@ -20,6 +20,69 @@ const positionKey = () => `${state.mode}${state.script.sentences[state.index].id
 const isRecording = () => state.phase !== 'idle';
 const locked = () => isRecording() || state.busy || state.tabBlocked;
 const icons = () => window.lucide.createIcons();
+const RATING_SCALE = {
+  version: 'operator-mumbling-v1',
+  source: 'operator',
+  type: 'ordinal_subjective',
+  levels: { 1: 'ほぼ明瞭', 2: '少し不明瞭', 3: '中程度に不明瞭', 4: 'かなり不明瞭', 5: '非常に不明瞭' },
+};
+function assessmentFor(take) {
+  const a = take?.assessment;
+  return a && a.source === 'operator' && a.scaleVersion === RATING_SCALE.version
+    && Number.isInteger(a.level) && a.level >= 1 && a.level <= 5
+    && a.raterId && a.ratedAt && a.samples === take.samples
+    && a.tailTrimSeconds === (take.tailTrimSeconds || 0) ? a : null;
+}
+function ratingDirty() {
+  const take = chosenTake();
+  if (!take) return false;
+  const a = assessmentFor(take);
+  const level = $('rating').value;
+  return level !== String(a?.level ?? '') || Boolean(level && $('rater-id').value.trim() !== (a?.raterId || ''));
+}
+function confirmRatingDiscard() {
+  return !ratingDirty() || confirm('未保存の担当者評価があります。変更を破棄して移動しますか？');
+}
+function ratingFields(take) {
+  const a = assessmentFor(take);
+  return [a?.level ?? '', a?.source ?? '', a?.raterId ?? '', a?.ratedAt ?? '', a?.scaleVersion ?? '', a ? 'rated' : 'unrated'];
+}
+function renderAssessment() {
+  const take = chosenTake(), a = assessmentFor(take);
+  $('rating').value = a?.level ?? '';
+  $('rater-id').value = a?.raterId || state.session.raterId || '';
+  $('legacy-rating').hidden = take?.rating == null;
+  $('legacy-rating').textContent = take?.rating == null ? '' : `旧自己評価：${take.rating}（担当者ラベルとは別に保持）`;
+  $('rating-status').textContent = a
+    ? `評価済み：${a.level} / 5 · ${a.raterId} · ${new Date(a.ratedAt).toLocaleString('ja-JP')}`
+    : '担当者評価：未評価';
+}
+async function saveAssessment() {
+  const take = chosenTake();
+  if (!take || state.unsaved) return;
+  const raterId = $('rater-id').value.trim(), value = $('rating').value;
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(raterId)) throw new Error('担当者IDは半角英数字・ハイフン・アンダースコア（1〜32文字）で入力してください。');
+  const level = value === '' ? null : Number(value);
+  if (level !== null && (!Number.isInteger(level) || level < 1 || level > 5)) throw new Error('評価は1〜5で選択してください。');
+  const ratedAt = new Date().toISOString();
+  const entry = { level, raterId, ratedAt, source: 'operator', scaleVersion: RATING_SCALE.version,
+    samples: take.samples, tailTrimSeconds: take.tailTrimSeconds || 0, action: level === null ? 'clear' : 'rate' };
+  const updated = { ...take, assessment: level === null ? null : entry,
+    assessmentHistory: [...(take.assessmentHistory || []), entry] };
+  const session = { ...state.session, raterId };
+  // Persist the label and the operator default atomically; failed saves leave memory unchanged.
+  await new Promise((resolve, reject) => {
+    const tx = state.db.transaction(['takes', 'sessions'], 'readwrite');
+    tx.objectStore('takes').put(updated); tx.objectStore('sessions').put(session);
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error || new Error('評価を保存できませんでした。'));
+    tx.onerror = () => {};
+  });
+  state.session = session;
+  state.takes[state.takes.findIndex((item) => item.id === take.id)] = updated;
+  error(''); renderAssessment(); renderLibrary();
+  toast(level === null ? '担当者評価を未評価に戻しました。' : '担当者評価を保存しました。');
+}
 const notes = {
   '06': '木槌：きづち', '08': 'ナミ：人名（なみ）／みなも：そのまま読んでください。',
   '09': '銘柄：めいがら／納めた：おさめた',
@@ -93,6 +156,7 @@ async function refreshSessions() {
   $('session-select').value = state.session.id;
 }
 async function newSession() {
+  if (state.session && !confirmRatingDiscard()) return;
   state.script = state.latestScript;
   const used = new Set(state.sessions.map((session) => session.speakerId));
   let number = 1;
@@ -109,6 +173,7 @@ async function newSession() {
   render();
 }
 async function selectSession(id) {
+  if (state.session && !confirmRatingDiscard()) { $('session-select').value = state.session.id; return; }
   state.sessions = await getAll('sessions');
   const selected = state.sessions.find((session) => session.id === id);
   if (!selected) throw new Error('セッションが見つかりません。');
@@ -208,7 +273,7 @@ function renderReview() {
   const takes = currentTakes(); const take = chosenTake();
   $('empty-take').hidden = Boolean(take); $('review-content').hidden = !take;
   $('take-status').textContent = take ? `${takes.length} テイク` : '未録音';
-  if (!take) { $('take-audio').removeAttribute('src'); return; }
+  if (!take) { $('take-audio').removeAttribute('src'); renderAssessment(); return; }
   state.viewTake = take.id;
   $('take-select').replaceChildren(...takes.map((item) => new Option(
     `テイク ${item.number} · ${item.duration.toFixed(1)}秒${state.session.selected[positionKey()] === item.id ? ' · 採用' : ''}${state.unsaved?.id === item.id ? ' · 未保存' : ''}`, item.id)));
@@ -218,7 +283,7 @@ function renderReview() {
   $('trim-status').textContent = take.tailTrimSeconds
     ? '末尾0.3秒を除外 · 原音を保持'
     : (take.originalWave?.duration || take.duration) < 1 ? '1秒未満の録音は自動で切りません。' : '原音（末尾処理なし）';
-  $('rating').value = take.rating ?? ''; $('take-note').value = take.note;
+  renderAssessment(); $('take-note').value = take.note;
   const warnings = [];
   if (take.duration < 1) warnings.push('録音が短いため、内容を確認してください');
   if (take.rmsDb < -45) warnings.push('入力が小さいため、マイク位置を確認してください');
@@ -242,6 +307,7 @@ function renderLibrary() {
       button.dataset.available = String(Boolean(take));
       button.dataset.key = mode + sentence.id;
       button.title = `${sentence.id} ${mode} · ${take ? (selected ? '採用テイクを再生' : '最新の未採用テイクを再生') : '未録音'}`;
+      if (take) button.title += assessmentFor(take) ? ` · 担当者評価 ${assessmentFor(take).level}/5` : ' · 未評価';
       button.setAttribute('aria-label', button.title);
       button.classList.toggle('complete', Boolean(selected));
       const icon = document.createElement('i'); icon.dataset.lucide = take ? 'play' : 'minus';
@@ -249,7 +315,7 @@ function renderLibrary() {
       button.append(icon, condition);
       button.onclick = () => action(async () => {
         if (!take || state.unsaved) return;
-        await moveTo(index, mode);
+        if (await moveTo(index, mode) === false) return;
         state.viewTake = take.id; renderReview();
         try { await $('take-audio').play(); }
         catch (cause) { if (cause.name !== 'AbortError') throw cause; }
@@ -288,6 +354,8 @@ function showExport() {
   const count = Object.keys(state.session.selected).length;
   $('export-summary').textContent = `${state.session.speakerId} · 採用済み ${count} / ${recordingCount()} 発話 · 録音 ${state.takes.length}テイク。${count < recordingCount() ? '未完了の状態でも保存できます。' : ''}`;
   $('export-status').textContent = '';
+  const unrated = state.takes.filter((take) => Object.values(state.session.selected).includes(take.id) && !assessmentFor(take)).length;
+  if (unrated) $('export-summary').textContent += ` 採用済みのうち${unrated}件は担当者未評価です（ラベルは空欄）。`;
   if (!$('export-dialog').open) $('export-dialog').showModal();
 }
 function updateControls() {
@@ -304,7 +372,11 @@ function updateControls() {
     for (const id of ['new-session', 'session-select', 'mode-h', 'mode-m', 'previous', 'next', 'take-select']) $(id).disabled = true;
     document.querySelectorAll('.sentence-item').forEach((button) => { button.disabled = true; });
   }
-  $('accept-next').disabled = lock || Boolean(state.unsaved);
+  $('rating').disabled = lock || !review || Boolean(state.unsaved);
+  $('rater-id').disabled = lock || !review || Boolean(state.unsaved);
+  $('save-rating').disabled = lock || !review || Boolean(state.unsaved);
+  $('accept-next').disabled = lock || Boolean(state.unsaved) || !assessmentFor(review) || ratingDirty();
+  $('accept-next').title = assessmentFor(review) && !ratingDirty() ? '採用して次へ' : '担当者評価を保存してください';
   $('record-button').disabled = lock || !state.stream || Boolean(state.unsaved);
   $('practice-start').disabled = lock;
   $('record-button').hidden = isRecording() && state.purpose === 'take';
@@ -324,6 +396,7 @@ async function action(operation) {
   finally { state.busy = false; updateControls(); }
 }
 async function moveTo(index, mode) {
+  if (!confirmRatingDiscard()) return false;
   state.index = index; state.mode = mode; state.viewTake = null;
   await saveSession(); render();
 }
@@ -392,6 +465,8 @@ async function connectMicrophone() {
 function pausePlayers() { document.querySelectorAll('audio').forEach((audio) => audio.pause()); }
 async function startRecording(purpose) {
   if (locked() || state.unsaved) return;
+  if (!confirmRatingDiscard()) return;
+  renderAssessment();
   if (!/^[A-Za-z0-9_-]{1,32}$/.test($('speaker-id').value)) {
     error('話者IDは半角英数字・ハイフン・アンダースコアで入力してください。'); return;
   }
@@ -475,8 +550,15 @@ async function withStopTrim(take, enabled) {
 async function changeStopTrim() {
   const take = chosenTake();
   if (!take || state.unsaved) return;
+  if (!confirmRatingDiscard()) { $('trim-take-toggle').checked = Boolean(take.tailTrimSeconds); return; }
   try {
     const updated = await withStopTrim(take, $('trim-take-toggle').checked);
+    if (updated.samples !== take.samples && take.assessment) {
+      updated.assessment = null;
+      updated.assessmentHistory = [...(take.assessmentHistory || []), {
+        action: 'audio_changed', previousAssessment: take.assessment, changedAt: new Date().toISOString(),
+      }];
+    }
     await put('takes', updated);
     state.takes[state.takes.findIndex((item) => item.id === take.id)] = updated;
     render();
@@ -521,7 +603,7 @@ async function stopRecording(manual = false) {
       catch (cause) { state.unsaved = take; report(cause); }
       render();
       if (state.unsaved) error('この録音をブラウザに保存できませんでした。移動せず「このテイクを保存」でWAVをダウンロードしてください。');
-      else toast('録音を保存しました。回聴してから採用してください。');
+      else toast('録音を保存しました。担当者が回聴・評価してから採用してください。');
     }
   } catch (cause) { report(cause); }
   finally {
@@ -550,33 +632,46 @@ async function exportZip() {
     const selected = new Set(Object.values(state.session.selected));
     const takes = state.takes.filter((take) => all || selected.has(take.id));
     if (!takes.length) throw new Error('保存対象がありません。録音するか、未採用テイクを含めてください。');
-    const manifest = [['speaker_id', 'session_id', 'sentence_id', 'condition', 'take', 'selected', 'wav_path', 'text', 'sample_rate', 'samples', 'duration_sec', 'mumbling_rating', 'note', 'recorded_at', 'rms_dbfs', 'peak', 'clipped_samples', 'tail_trim_sec', 'original_wav_path', 'original_duration_sec']];
+    const manifest = [['speaker_id', 'session_id', 'sentence_id', 'condition', 'take', 'selected', 'wav_path', 'text', 'sample_rate', 'samples', 'duration_sec', 'mumbling_rating', 'note', 'recorded_at', 'rms_dbfs', 'peak', 'clipped_samples', 'tail_trim_sec', 'original_wav_path', 'original_duration_sec',
+      'take_id', 'mumbling_label', 'rating_source', 'rater_id', 'rated_at', 'rating_scale_version', 'rating_status']];
     for (const take of takes) {
       const path = `audio/${take.condition}/${filename(take)}`;
       zip.file(path, await take.blob.arrayBuffer());
       if (take.originalWave) zip.file(originalPath(take), await take.originalWave.blob.arrayBuffer());
-      manifest.push([state.session.speakerId, state.session.id, take.sentenceId, take.condition, take.number, selected.has(take.id), path, take.text, take.sampleRate, take.samples, take.duration, take.rating, take.note, take.recordedAt, take.rmsDb, take.peak, take.clippedSamples, take.tailTrimSeconds || 0, originalPath(take), take.originalWave?.duration ?? take.duration]);
+      manifest.push([state.session.speakerId, state.session.id, take.sentenceId, take.condition, take.number, selected.has(take.id), path, take.text, take.sampleRate, take.samples, take.duration, take.rating, take.note, take.recordedAt, take.rmsDb, take.peak, take.clippedSamples, take.tailTrimSeconds || 0, originalPath(take), take.originalWave?.duration ?? take.duration,
+        take.id, ...ratingFields(take)]);
     }
-    const pairs = [['speaker_id', 'sentence_id', 'text', 'clean_wav', 'mumbling_wav', 'complete']];
+    const labelColumns = ['mumbling_label', 'rating_source', 'rater_id', 'rated_at', 'rating_scale_version', 'rating_status'];
+    const pairs = [['speaker_id', 'sentence_id', 'text', 'clean_wav', 'mumbling_wav', 'complete',
+      ...labelColumns.map((key) => 'h_' + key), ...labelColumns.map((key) => 'm_' + key), 'labels_complete']];
     for (const sentence of state.script.sentences) {
       const h = takes.find((take) => take.id === state.session.selected[`H${sentence.id}`]);
       const m = takes.find((take) => take.id === state.session.selected[`M${sentence.id}`]);
-      pairs.push([state.session.speakerId, sentence.id, sentence.text, h ? `audio/H/${filename(h)}` : '', m ? `audio/M/${filename(m)}` : '', Boolean(h && m)]);
+      pairs.push([state.session.speakerId, sentence.id, sentence.text, h ? `audio/H/${filename(h)}` : '', m ? `audio/M/${filename(m)}` : '', Boolean(h && m),
+        ...ratingFields(h), ...ratingFields(m), Boolean(assessmentFor(h) && assessmentFor(m))]);
     }
     zip.file('manifest.csv', csv(manifest)); zip.file('pairs.csv', csv(pairs));
+    zip.file('label_schema.json', JSON.stringify({ ...RATING_SCALE, field: 'mumbling_label',
+      missing: 'null in JSON / empty in CSV; never infer from H/M condition',
+      legacyField: 'mumbling_rating is the old participant self-report; not an operator label',
+      appliesTo: 'current audio/ WAV only, not originals/ backup', }, null, 2));
+    zip.file('LABELS.txt', 'mumbling_label: operator-assigned ordinal level 1-5, not an objective or automatic score.\nH/M is the requested speaking condition, independent of the observed rating.\nEmpty label means unrated, NOT level 0 or clear speech.\nmumbling_rating retains legacy participant self-ratings only. Do not use it as an operator label.\nmanifest.csv includes per-take labels, rater_id, rated_at and scale version. pairs.csv includes h_/m_ labels for the selected takes and labels_complete.\nsession.json retains assessmentHistory. Labels apply only to audio/ WAVs, not originals/ backups.\n');
     zip.file('script.txt', state.script.source_text);
     zip.file('session.json', JSON.stringify({
-      ...state.session, exportedAt: new Date().toISOString(), appVersion: '1.0.0-public',
+      ...state.session, exportedAt: new Date().toISOString(), appVersion: '1.1.0-public',
       scriptVersion: state.script.version, exportedScriptSha256: state.script.script_sha256, referencePolicy: 'No reference audio is provided or loaded.',
       audioFormat: 'PCM16 mono WAV; browser AudioContext sample rate; no normalization; optional 0.3-second end trim with original preserved',
       alignment: 'Same text only. Recordings are not frame-aligned.',
+      labelSchema: RATING_SCALE,
       userAgent: navigator.userAgent,
       takes: takes.map(({ blob, reference, originalWave, ...metadata }) => ({
         ...metadata, file: `audio/${metadata.condition}/${filename(metadata)}`,
+        mumbling_label: assessmentFor(metadata)?.level ?? null,
+        rating_source: assessmentFor(metadata)?.source ?? null,
         original: originalWave ? { ...Object.fromEntries(Object.entries(originalWave).filter(([key]) => key !== 'blob')), file: originalPath({ ...metadata, originalWave }) } : null,
       })),
     }, null, 2));
-    zip.file('README.txt', 'H = 通常のハキハキ発話 / clear speech\nM = もごもご発話 / mumbled speech\nmanifest.csv: all exported takes; selected=true identifies accepted takes.\npairs.csv: accepted same-text pairs only; empty paths indicate missing selections.\nThe two conditions are NOT time-aligned. No loudness normalization was applied. Optional fixed end trimming is recorded in tail_trim_sec; original_wav_path points to the unmodified backup. pairs.csv points to the current reviewed version. This is NOT automatic click detection or speech alignment.\nMumbling rating is optional participant self-report, not an objective score.\nReference and practice audio are not included. Keep these recordings within the approved research scope.\n');
+    zip.file('README.txt', 'H = 通常のハキハキ発話 / clear speech\nM = もごもご発話 / mumbled speech\nmanifest.csv: all exported takes; selected=true identifies accepted takes.\npairs.csv: accepted same-text pairs only; empty paths indicate missing selections.\nThe two conditions are NOT time-aligned. No loudness normalization was applied. Optional fixed end trimming is recorded in tail_trim_sec; original_wav_path points to the unmodified backup. pairs.csv points to the current reviewed version. This is NOT automatic click detection or speech alignment.\nmumbling_label is the operator-assigned subjective level; see LABELS.txt. mumbling_rating retains legacy participant self-report only. Neither is an objective score.\nReference and practice audio are not included. Keep these recordings within the approved research scope.\n');
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (metadata) => {
       $('export-status').textContent = `作成中 ${Math.round(metadata.percent)}%`;
     });
@@ -645,15 +740,24 @@ function bindEvents() {
   $('microphone-select').onchange = () => action(async () => { if (state.stream) await connectMicrophone(); });
   $('record-button').onclick = () => startRecording('take');
   $('stop-button').onclick = () => stopRecording(true);
-  $('take-select').onchange = () => { if (!locked()) { state.viewTake = $('take-select').value; renderReview(); updateControls(); } };
-  $('rating').onchange = () => action(async () => {
-    const take = chosenTake(); take.rating = $('rating').value ? Number($('rating').value) : null; await put('takes', take);
-  });
+  $('take-select').onchange = () => {
+    if (locked()) return;
+    if (!confirmRatingDiscard()) { $('take-select').value = chosenTake().id; return; }
+    state.viewTake = $('take-select').value; renderReview(); updateControls();
+  };
+  const ratingEdited = () => {
+    $('rating-status').textContent = ratingDirty() ? '担当者評価：変更あり（未保存）' : '担当者評価：変更なし';
+    updateControls();
+  };
+  $('rating').onchange = ratingEdited;
+  $('rater-id').oninput = ratingEdited;
+  $('save-rating').onclick = () => action(saveAssessment);
   $('take-note').onchange = () => action(async () => {
     const take = chosenTake(); take.note = $('take-note').value.trim(); await put('takes', take);
   });
   $('accept-next').onclick = () => action(async () => {
     const take = chosenTake(); if (!take || state.unsaved) return;
+    if (!assessmentFor(take) || ratingDirty()) throw new Error('担当者評価を保存してから採用してください。');
     const wasComplete = Object.keys(state.session.selected).length === recordingCount();
     state.session.selected[positionKey()] = take.id; await saveSession();
     const complete = Object.keys(state.session.selected).length === recordingCount();
@@ -691,7 +795,7 @@ function bindEvents() {
   $('export-button').onclick = showExport;
   $('confirm-export').onclick = exportZip;
   window.addEventListener('beforeunload', (event) => {
-    if (isRecording() || state.unsaved) { event.preventDefault(); event.returnValue = ''; }
+    if (isRecording() || state.unsaved || ratingDirty()) { event.preventDefault(); event.returnValue = ''; }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && isRecording()) {

@@ -1,6 +1,16 @@
 # もごもご录音页：GitHub Pages 版
 
-日语收录页面：22句原稿与振假名、H/M录音、回听、重录、选用、自评、实时频谱及ZIP导出。
+日语收录页面：22句原稿与振假名、H/M录音、回听、重录、选用、担当者评价、实时频谱及ZIP导出。
+
+## 2026-11-16 担当者含混度标签
+
+录音后回听，由担当者输入匿名ID并选择1–5级，点击「評価を保存」，然后采用。1=ほぼ明瞭，2=少し不明瞭，3=中程度に不明瞭，4=かなり不明瞭，5=非常に不明瞭。这是主观有序等级，不是客观测量或自动分数；H/M是发话条件，不决定评分，也不保证两者有分差。
+
+- 标签随具体take保存在当前浏览器，刷新或切换会话后保留；旧录音可补评。修改末尾裁剪会清空当前标签并保留历史，需重新回听评价。
+- manifest.csv新增mumbling_label、rating_source、rater_id、rated_at、rating_scale_version、rating_status、take_id。旧mumbling_rating仅保留历史自评，不转换为担当者标签。
+- pairs.csv分别记录h_/m_上述标签字段及labels_complete；complete仍只表示音频配对完整。未评价为CSV空值、JSON null，不能当作0级或清晰音频。
+- session.json保留评价历史；label_schema.json和LABELS.txt说明标签定义。标签只对应audio/当前音频，不直接用于originals/未裁剪备份。
+- 担当者ID是人工填写的标识，不是登录认证。浏览器数据仍需通过ZIP备份，不自动上传。
 
 ## 参考音频政策
 
